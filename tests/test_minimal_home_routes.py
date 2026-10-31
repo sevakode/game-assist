@@ -36,7 +36,7 @@ class MinimalHomeRoutes(unittest.TestCase):
         for title in ('Elden Ring','The Witcher 3','Castlevania','Baldur'):
             self.assertNotIn(title,response.text)
         self.assertLess(len(' '.join(doc.text).split()),240)
-        self.assertTrue(doc.find('a',href='/connect/claude'))
+        self.assertTrue(doc.find('a',href='/connect'))
         self.assertTrue(any(a.get('id')=='assistant' for _,a in doc.elements))
         self.assertTrue(any(a.get('id')=='library' for _,a in doc.elements))
         self.assertNotIn('script-src',response.headers['content-security-policy'])

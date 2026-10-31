@@ -1,12 +1,25 @@
 """Opt-in site inbox only. No cloud/push/LLM or real save fixtures."""
 from concurrent.futures import ThreadPoolExecutor
 import json
+from html.parser import HTMLParser
 import time
 import unittest
 from uuid import uuid4
 
 from remote_server.app import APPID, COOKIE, INBOX_LIMIT, INBOX_TTL, NOTICE, digest
 import test_remote_service as service_tests
+
+
+class ScriptBlocks(HTMLParser):
+    def __init__(self, source):
+        super().__init__(); self.scripts=[]; self.current=None; self.feed(source)
+    def handle_starttag(self, tag, attrs):
+        if tag == 'script':
+            self.current={'attrs':dict(attrs), 'text':''}; self.scripts.append(self.current)
+    def handle_data(self, data):
+        if self.current is not None: self.current['text'] += data
+    def handle_endtag(self, tag):
+        if tag == 'script': self.current=None
 
 
 class InboxTests(unittest.TestCase):
@@ -133,12 +146,20 @@ class InboxTests(unittest.TestCase):
         landing=self.client.get('/')
         self.assertIn('/assets/console.css',landing.text)
         self.assertIn("style-src 'self'",landing.headers['content-security-policy'])
-        self.assertNotIn('<script',landing.text)
+        scripts=ScriptBlocks(landing.text).scripts
+        self.assertEqual(len(scripts),1)
+        self.assertEqual(scripts[0]['attrs'],{'type':'application/ld+json'})
+        metadata=json.loads(scripts[0]['text'])
+        self.assertEqual(metadata['@type'],'WebPage')
+        self.assertEqual(metadata['url'],service_tests.ORIGIN+'/')
+        self.assertEqual(landing.headers['content-security-policy'],
+                         "default-src 'none'; style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
         css=self.client.get('/assets/console.css')
         self.assertEqual(css.status_code,200);self.assertTrue(css.headers['content-type'].startswith('text/css'))
         self.assertEqual(self.client.get('/assets/../app.py').status_code,404)
         self.prepared()
         home=self.client.get('/games')
+        self.assertEqual(ScriptBlocks(home.text).scripts,[])
         self.assertIn(NOTICE,home.text)
         self.assertIn('/account/notifications/read',home.text)
         self.assertIn('/account/notifications',home.text)

@@ -1,0 +1,55 @@
+name: Deck companion Python compatibility
+
+on:
+  push:
+    paths:
+      - '.github/workflows/deck-compatibility.yml'
+      - 'deck/**'
+      - 'agent/watch.py'
+      - 'decoders/**'
+      - 'tools/package_deck.py'
+      - 'tools/check_deck_compatibility.py'
+      - 'tests/test_deck*.py'
+      - 'tests/test_watch.py'
+      - 'tests/test_belmont.py'
+      - 'docs/STEAM_DECK.md'
+      - 'LICENSE'
+  pull_request:
+    paths:
+      - '.github/workflows/deck-compatibility.yml'
+      - 'deck/**'
+      - 'agent/watch.py'
+      - 'decoders/**'
+      - 'tools/package_deck.py'
+      - 'tools/check_deck_compatibility.py'
+      - 'tests/test_deck*.py'
+      - 'tests/test_watch.py'
+      - 'tests/test_belmont.py'
+      - 'docs/STEAM_DECK.md'
+      - 'LICENSE'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  companion:
+    name: Linux / Python ${{ matrix.python }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.10 is a legacy compatibility floor, not an upstream-supported runtime.
+        python: ['3.10.22', '3.12.16', '3.15.2']
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3 (peeled commit)
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python }}
+          architecture: x64
+          allow-prereleases: false
+      - name: Run stdlib companion, archive and local contracts
+        run: python -I -S tools/check_deck_compatibility.py

@@ -57,7 +57,14 @@ security review and restoration drills remain deployment gates.
    Steam identity. Revoking all access on the account page deletes grants, devices,
    pending device approvals and observations/events; it revokes OAuth credentials.
 
-Scopes: OAuth `progress.read`; game/device `saves.summary`, `saves.metadata`.
+Scopes: OAuth `progress.read`, plus optional explicitly requested `library.read`;
+game/device `saves.summary`, `saves.metadata`. Library MCP reading additionally
+requires the account's library opt-in and a fresh cache, manually refreshed on the
+site. Existing progress-only clients/tokens are not expanded. New DCR registrations
+without scope permit both capabilities, but optional library consent defaults off
+and only an explicit checkbox grants it to the token. See
+[MCP library consent](../docs/MCP_LIBRARY_CONSENT.md) for the dual-consent flow,
+source limitations, and the still-open live Claude/Steam acceptance.
 Access tokens expire in ten minutes, OAuth refresh tokens in 30 days and rotate on
 use. Refresh replay revokes the family. All bearer tokens and device/user pairing
 codes are hashed at rest. OAuth code/state and device pairing are one-use. HTTPS,

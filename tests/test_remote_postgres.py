@@ -168,9 +168,22 @@ class PostgresDiscoveryTests(discovery_tests.DiscoveryTests):
     setUp=PostgresServiceTests.setUp
 
 import test_remote_library as library_tests
+import test_remote_connection_status as connection_tests
+
+
+@unittest.skipUnless(DSN, 'Real local PostgreSQL DSN not supplied')
+class PostgresConnectionStatusTests(connection_tests.ConnectionStatusTests):
+    setUp=PostgresServiceTests.setUp
 
 @unittest.skipUnless(DSN, 'Real local PostgreSQL DSN not supplied')
 class PostgresLibraryTests(library_tests.LibraryTests):
     def setUp(self):
         self.reader=library_tests.FakeLibrary()
         with patch('remote_server.app.LibraryReader',return_value=self.reader):PostgresServiceTests.setUp(self)
+
+import test_remote_mcp_library as mcp_library_tests
+
+
+@unittest.skipUnless(DSN, 'Real local PostgreSQL DSN not supplied')
+class PostgresMCPLibraryTests(mcp_library_tests.MCPLibraryTests):
+    setUp=PostgresLibraryTests.setUp

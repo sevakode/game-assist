@@ -1,43 +1,50 @@
 # Остаток до готового продукта
 
-Обновлено 2026-10-31, 22:48 UTC. Порядок и критерии: [ROADMAP.md](ROADMAP.md).
+Обновлено 2026-10-31, 23:48 UTC. Порядок и критерии: [ROADMAP.md](ROADMAP.md).
 Публикация не завершает разработку; следующий шаг — первый незаблокированный срез.
 
 ## Текущий candidate — локальный, не опубликован
 
-Live baseline: `3fc…`. Объединены:
-- **Save inspector (4 файла):** локальный read-only осмотр и категориальное
-  before/after. Belmont — прежние четыре scalar-поля; ER signature-only,
-  unsupported; W3 unsupported. Игровая семантика не добавлена.
-- **Deck doctor/recovery (7 файлов):** диагностические/recovery сценарии;
-  физический SteamOS/Game Mode ещё не проверен.
-- **OAuth (7 файлов):** RFC 9207 и сохранение identity/существующего allowlist;
-  новые ключи/grants не созданы, ChatGPT callback не настроен.
+Live baseline: `ef1…`, runtime-only rebuild **Python 3.12.16**,
+deploy `dep-dbj7p6mtlv9c73cf7tmg`; новых функций этим rebuild не опубликовано.
+Wave 2 локально включает:
+- **Private capture/compare:** read-only копии/сравнение; настоящие controlled
+  пары и semantic mapping ещё не проверены.
+- **Deck:** atomic recovery + compatibility workflow; без аппаратной приёмки.
+- **OAuth/MCP:** optional `library.read` default OFF, cached/permission-gated
+  `get_library`, `connection_status`; без новых ключей и live-client claims.
+- **Discovery:** `/connect`, robots/sitemap/llms и private noindex. Noindex не
+  заменяет авторизацию и полноценную privacy policy.
 
-Локально: **476 discovered, 10.151 s, 83 PostgreSQL skips, 393 executed PASS**.
-Это не real-PG acceptance. Независимые reviews: save 15 / OAuth 27 / Deck 54 PASS.
-Code-only ZIP: 12 entries, 73 102 bytes,
-SHA-256 `7a47e5d9832d2ce7db83a5fca5a44be0f719e9e620881204574c72ba2e9345b2`.
-**Открыто перед выпуском:** actual-PostgreSQL CI, exact revision/artifact, публикация
-и безопасный deployed smoke. Предыдущие 424 real-PG теста / 28.394 s / 0 skips —
-исторический checkpoint другого candidate, не доказательство текущего.
+Fixture fix и MCP consent/Deck acceptance tests включены; helper MODULES
+содержит Deck acceptance. Итоговая suite **600 за 11.296 s: 499 PASS +
+101 PG skips, OK**. Отдельная stdlib suite **116 за 1.574 s, 0 skips, PASS**. Это не real-PG проверка. Capture/compare: 22 теста независимо PASS при
+umask 0022 и 0077.
+Native reviews: MCP 26 / stdlib Deck 113 PASS, без новых findings. JS/manual-import,
+compile/catalog/profiles PASS. Guide records 0, profiles 3; Belmont по-прежнему
+только четыре raw поля. Исторические 476/83 skips и 424 actual-PG checkpoints
+не относятся к текущему candidate. Публикация Wave 2 не выполнена.
 
 ## Следующие проверяемые задачи
 
-- [ ] **REL:** actual disposable-PG CI → review → разрешённый выпуск → проверить
+- [ ] **REL:** fixture fix/локальная regression пройдены; actual disposable-PG CI →
+  review → разрешённый выпуск → проверить
   deployed revision/health/OAuth metadata/ZIP checksum; затем продолжать roadmap.
 - [ ] **IMP-04/OAuth:** настоящий phone Steam callback, consent, manual import и
-  выбранный MCP клиент с cancel/retry/revoke. Static preview/test client не замена.
+  выбранный MCP клиент с cancel/retry/revoke. В docs 7 client recipes; следующий
+  кандидат — ChatGPT web. Реальные подключения не проверены; static preview/test
+  client не замена.
 - [ ] **BEL:** controlled private before/after + точный build + независимый
   in-game ground truth; один reviewed mapping. Пока unknown, не число улучшений.
 - [ ] **DECK:** физическая установка, doctor/recovery, Game Mode, suspend/offline,
   expiry/revoke/uninstall с неизменными оригиналами.
 - [ ] **ER/W3:** licenses/dependencies/build/fixtures до gameplay adapter;
   signature/container recognition не означает поддержку прогресса.
-- [ ] **ACH/LIB:** безопасная операторская настройка ключа и consented live check;
+- [ ] **ACH/LIB:** безопасная отдельное явное согласие на операторский ключ, его безопасная настройка
+  и consented live check;
   private profile не становится доступным по одному ключу. Никакого auto-grant.
 - [ ] **CLD/OPS:** разрешённый Cloud source, scheduler, отдельно разрешённая
-  доставка, реальные latency/cost/retention/restore evidence.
+  доставка, реальные latency/cost/retention/restore evidence и готовая privacy policy.
 
 ## Что по-прежнему нельзя обещать
 

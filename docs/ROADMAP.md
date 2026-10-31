@@ -1,32 +1,35 @@
 # Game Assist: проверяемый roadmap
 
-Обновлено 2026-10-31, 22:48 UTC. Релиз — контрольная точка, не завершение
+Обновлено 2026-10-31, 23:48 UTC. Релиз — контрольная точка, не завершение
 разработки. Сроки, проценты покрытия и одобрение Valve не обещаются.
 
 ## Текущее состояние
 
-Опубликованный baseline — `3fc…`. Следующие три среза **объединены локально,
-но ещё не опубликованы**:
+Публичный baseline — `ef1…`, LIVE после **runtime-only rebuild на Python 3.12.16**,
+Render deploy `dep-dbj7p6mtlv9c73cf7tmg`. Этот rebuild не публиковал новые функции.
+Wave 2 ниже — **локальный неопубликованный candidate**.
 
-| Срез | Реализовано | Граница доказанного |
+| Срез | Реализовано локально | Что остаётся непроверенным |
 |---|---|---|
-| Read-only save inspector, 4 файла | Локальная проверка и категориальное before/after сравнение | Belmont остаётся четырьмя scalar-полями; ER — только распознавание сигнатуры, формат unsupported; W3 unsupported. Нет gameplay mapping |
-| Deck doctor/recovery, 7 файлов | Диагностика и восстановительные сценарии необязательного компаньона | Не доказана работа на физическом Steam Deck/Game Mode |
-| OAuth, 7 файлов | RFC 9207, сохранение identity и существующего callback allowlist | Не созданы ключи/grants, новый ChatGPT callback не настроен; live Steam/Claude acceptance не пройден |
+| Private capture/compare | Локальный read-only сбор и сравнение копий | Реальные контролируемые пары и игровая семантика; только прежние четыре Belmont raw fields |
+| Deck recovery/compat | Атомарное восстановление и compatibility workflow | Физический Deck, Game Mode, suspend/offline/reboot |
+| OAuth/MCP | Optional `library.read` default OFF; `get_library` читает только разрешённый cache; `connection_status` | Реальный client acceptance, live Steam API, согласие пользователя на ключ |
+| Discovery/privacy | `/connect`, robots/sitemap/llms и private noindex | Это не готовая privacy policy и не доказательство client compatibility; noindex не access control |
 
-Общий локальный прогон: **476 обнаруженных тестов за 10.151 s; 83 PostgreSQL
-skips, 393 выполненных PASS**. Это **не** проверка на настоящем PostgreSQL.
-Независимые проверки: save 15, OAuth 27, Deck 54 — PASS; они не суммируются с
-общим прогоном. Перед публикацией нужны actual-PostgreSQL CI и exact revision.
+Итоговый integration checkpoint: **600 тестов за 11.296 s, 499 PASS,
+101 PostgreSQL skips, OK**. Включены `test_mcp_consent_acceptance.py` и
+`test_deck_acceptance.py`; helper MODULES включает Deck acceptance. Отдельная
+stdlib suite: **116 тестов за 1.574 s, 0 skips, PASS**. Fixture исправлена. Actual PostgreSQL не запускался; skips не
+считаются пройденной PG-проверкой. Capture/compare: 22 теста независимо PASS
+при umask 0022 и 0077.
+Независимые native reviews: **26 MCP** и **113 stdlib Deck** — PASS/без findings;
+их не складывают с общим числом. JS/manual-import/compile/catalog/profile checks
+прошли. Guide records **0**, profiles **3**; semantic coverage не расширено.
 
-Code-only Deck ZIP: **12 entries, 73 102 bytes**; SHA-256:
-`7a47e5d9832d2ce7db83a5fca5a44be0f719e9e620881204574c72ba2e9345b2`.
-Контрольная сумма подтверждает конкретный артефакт, не физическую установку.
-
-**Исторический checkpoint:** предыдущий UI/catalog candidate прошёл 424 теста
-за 28.394 s на actual PostgreSQL без skips; static browser preview проверен на
-1165 px и effective 388 px без overflow. Это не результат нынешнего набора и не
-настоящий Android authenticated flow. Матрица: [RELEASE_QA_MATRIX](RELEASE_QA_MATRIX.md).
+**Исторические checkpoints:** предыдущая локальная suite 476 тестов включала
+83 PG skips (393 executed PASS), а более ранний UI candidate — 424 actual-PG tests
+без skips. Ни один не подтверждает нынешний candidate. Static UI/browser evidence
+и его ограничения: [RELEASE_QA_MATRIX](RELEASE_QA_MATRIX.md).
 
 ## Продуктовая цель и неизменные границы
 
@@ -49,8 +52,10 @@ ER signature не подтверждает версию, слоты или inven
 
 ## Ближайшая очередь: результат, evidence, blockers
 
-1. **REL — проверить и выпустить три локальных среза.** Прогнать actual disposable
-   PostgreSQL CI без подмены skips успехом; проверить ZIP, exact revision и review.
+1. **REL — проверить Wave 2 на PostgreSQL и выпустить.** Fixture fix и полная
+   локальная regression пройдены; далее actual disposable PostgreSQL CI без
+   подмены skips успехом. Проверить
+   текущий ZIP, exact revision и review; старый ZIP hash не относится к новому пакету.
    После разрешённой публикации проверить CI/deploy revision, health, metadata,
    download checksum и безопасные auth gates. **Готово:** свидетельства относятся
    к одному артефакту, нет regression/security blocker. Сейчас actual-PG CI и выпуск
@@ -58,7 +63,8 @@ ER signature не подтверждает версию, слоты или inven
 2. **IMP-04 / OAuth — настоящий пользовательский путь.** Steam sign-in → выбранная
    игра/scopes → browser file preview → отдельная projection-only отправка →
    разрешённый MCP клиент; cancel/retry/expiry/revoke. **Evidence:** реальный телефон
-   и выбранный клиент, без секретов в отчёте. **Blocker:** live Steam/Claude/Android
+   и выбранный клиент, без секретов в отчёте. Compatibility docs содержат 7 client
+   recipes; ChatGPT web — следующий кандидат, не уже проверенное подключение. **Blocker:** live Steam/Claude/Android
    acceptance не выполнен; callback allowlist не расширять наугад. Static preview,
    synthetic HTTP и RFC 9207 тесты сами по себе этот gate не закрывают.
 3. **BEL — один доказанный mapping.** Применить inspector/protocol к разрешённой
@@ -78,13 +84,15 @@ ER signature не подтверждает версию, слоты или inven
 6. **ACH/LIB — live Steam источники.** При безопасно настроенном оператором ключе
    проверить отдельные opt-in и реальную доступность профиля. Default-off,
    request-driven refresh, bounded cache, revoke/in-flight checks сохраняются.
+   Optional OAuth `library.read` не включается автоматически; `get_library` не
+   запускает скрытый Steam fetch и требует текущего разрешения.
    **Готово:** permitted unlocked achievements/owned identities с provenance;
    locked данные не раскрываются. **Blocker:** API key/live calls не подтверждены;
    ключ не обходит private-profile ограничения и не даёт Cloud save access.
 7. **CLD/OPS — автоматизация без скрытой стоимости.** Разрешённый AppID source,
    partial-sync/rollback/error модель, scheduler с free-host sleep, отдельный канал
    доставки/recipient consent. Проверить latency, retry/retention/deletion,
-   backup/restore и стоимость на явном масштабе. **Готово:** реальный source change
+   backup/restore, готовую privacy policy и стоимость на явном масштабе. **Готово:** реальный source change
    → разрешённая доставка; inbox/device/manual import не заменяют эту проверку.
 
 ## Продолжение после релиза и stop flags

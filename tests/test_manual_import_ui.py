@@ -5,7 +5,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import unittest
-from remote_server import ui
+from remote_server import ui, discovery
 from decoders.belmont import decode_bytes, safe_summary
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -71,7 +71,11 @@ class ManualImportUI(unittest.TestCase):
                 links = [link for link in SectionLinks(source).links if link['href'] == '/import']
                 # Unsupported games never expose an import CTA; shared help is separate.
                 self.assertEqual(links, [])
-                self.assertIn('href="/connect/claude"', source)
+                self.assertIn('href="/connect"', source)
+                hub = discovery.connect_body('https://assist.example')
+                guide_links = [link for link in SectionLinks(hub).links if link['href'] == '/connect/claude']
+                self.assertEqual(len(guide_links), 1)
+                self.assertIn('button', guide_links[0]['class'].split())
                 guide = ui.claude_body('https://assist.example/mcp')
                 fallback = [link for link in SectionLinks(guide).links if link['href'] == '/import']
                 self.assertEqual(len(fallback), 1)

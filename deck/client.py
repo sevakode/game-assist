@@ -73,62 +73,101 @@ class Transport:
 
 
 class Store:
-    """Private own-state only. Reject symlink parents and non-private files."""
+    """Linux private state, descriptor-relative I/O and atomic file replacement.
+
+    Directory identity is checked on every operation. This is not a security
+    boundary against another process running as the same user.
+    """
     def __init__(self, directory=DEFAULT_HOME, *, create=True):
         self.directory = Path(directory).absolute()
-        for part in reversed((self.directory, *self.directory.parents)):
-            if part.exists() and part.is_symlink():
-                raise ValueError('State directory must not contain symlinks')
-        if create:
-            self.directory.mkdir(parents=True, mode=0o700, exist_ok=True)
-        st = self.directory.stat()
-        if st.st_uid != os.getuid() or stat.S_IMODE(st.st_mode) & 0o077:
-            raise ValueError('State directory must be owned by you and mode 0700')
+        self.identity = None
+        with self._directory(create=create) as fd:
+            st = os.fstat(fd)
+            self.identity = (st.st_dev, st.st_ino)
 
     @contextmanager
-    def lock(self):
-        fd = os.open(self.directory / '.lock', os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    def _directory(self, *, create=False):
+        if os.name != 'posix' or not hasattr(os, 'O_NOFOLLOW') or os.open not in os.supports_dir_fd:
+            raise ValueError('Safe state operations require Linux directory descriptors')
+        parts = watch._parts(self.directory)
+        fd = os.open('/', os.O_RDONLY | os.O_DIRECTORY)
         try:
+            for component in parts:
+                if create:
+                    try:
+                        os.mkdir(component, 0o700, dir_fd=fd)
+                    except FileExistsError:
+                        pass
+                child = os.open(component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+                os.close(fd)
+                fd = child
             st = os.fstat(fd)
-            if not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid() or stat.S_IMODE(st.st_mode) & 0o077:
-                raise ValueError('Lock must be private and regular')
-            fcntl.flock(fd, fcntl.LOCK_EX)
-            yield
+            if st.st_uid != os.getuid() or stat.S_IMODE(st.st_mode) & 0o077:
+                raise ValueError('State directory must be owned by you and mode 0700')
+            if self.identity is not None and self.identity != (st.st_dev, st.st_ino):
+                raise ValueError('State directory changed; reopen explicitly')
+            yield fd
         finally:
             os.close(fd)
 
+    @staticmethod
+    def _name(name):
+        if name not in ('config.json', 'state.json'):
+            raise ValueError('Unsupported state file')
+        return name
+
+    @contextmanager
+    def lock(self):
+        with self._directory() as directory:
+            fd = os.open('.lock', os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600, dir_fd=directory)
+            try:
+                st = os.fstat(fd)
+                if not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid() or stat.S_IMODE(st.st_mode) & 0o077:
+                    raise ValueError('Lock must be private and regular')
+                fcntl.flock(fd, fcntl.LOCK_EX)
+                yield
+            finally:
+                os.close(fd)
+
     def read(self, name):
-        path = self.directory / name
-        try:
-            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-        except FileNotFoundError:
-            return {}
-        with os.fdopen(fd, 'rb') as stream:
-            st = os.fstat(stream.fileno())
-            if not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid() or stat.S_IMODE(st.st_mode) & 0o077:
-                raise ValueError('State file must be private and regular')
-            data = stream.read(LIMIT + 1)
-            if len(data) > LIMIT:
-                raise ValueError('State exceeds size limit')
-            value = json.loads(data)
-            if not isinstance(value, dict):
-                raise ValueError('Invalid state')
-            return value
+        name = self._name(name)
+        with self._directory() as directory:
+            try:
+                fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
+            except FileNotFoundError:
+                return {}
+            with os.fdopen(fd, 'rb') as stream:
+                st = os.fstat(stream.fileno())
+                if not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid() or stat.S_IMODE(st.st_mode) & 0o077:
+                    raise ValueError('State file must be private and regular')
+                data = stream.read(LIMIT + 1)
+                if len(data) > LIMIT:
+                    raise ValueError('State exceeds size limit')
+                value = json.loads(data)
+                if not isinstance(value, dict):
+                    raise ValueError('Invalid state')
+                return value
 
     def write(self, name, value):
+        name = self._name(name)
         data = json.dumps(value, allow_nan=False).encode()
         if len(data) > LIMIT:
             raise ValueError('State exceeds size limit')
-        tmp = self.directory / ('.tmp-' + uuid.uuid4().hex)
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-        try:
-            with os.fdopen(fd, 'wb') as stream:
-                stream.write(data)
-                stream.flush()
-                os.fsync(stream.fileno())
-            os.replace(tmp, self.directory / name)
-        finally:
-            tmp.unlink(missing_ok=True)
+        with self._directory() as directory:
+            tmp = '.tmp-' + uuid.uuid4().hex
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=directory)
+            try:
+                with os.fdopen(fd, 'wb') as stream:
+                    stream.write(data)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                os.replace(tmp, name, src_dir_fd=directory, dst_dir_fd=directory)
+                os.fsync(directory)
+            finally:
+                try:
+                    os.unlink(tmp, dir_fd=directory)
+                except FileNotFoundError:
+                    pass
 
 
 def selection(appid, mode):

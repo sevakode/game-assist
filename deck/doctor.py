@@ -1,13 +1,15 @@
 """Local, read-only diagnostics. Never contact the server or print private state."""
 import importlib.util
 import json
+import os
+import stat
 from pathlib import Path
 import shutil
 import subprocess
 import time
 
 from .client import Store, selection, signature, server_origin, MAX_METADATA_BYTES, belmont, watch
-from .install import paths, require_safe, NAME
+from .install import paths, require_safe, unit_text, NAME
 
 
 def installation_state(home):
@@ -16,9 +18,17 @@ def installation_state(home):
         require_safe(path)
     if not destination.exists() and not unit.exists():
         return 'missing'
+    if (destination / '.installing').exists() or (destination / '.installing').is_symlink():
+        return 'interrupted'
     required = (destination / 'source/deck/__main__.py',
                 destination / 'source/deck/client.py', destination / 'venv/bin/python', unit)
-    return 'present' if all(path.is_file() for path in required) else 'partial'
+    if not all(path.is_file() for path in required):
+        return 'partial'
+    fd, _ = watch._open_root(unit)
+    with os.fdopen(fd, 'rb') as stream:
+        if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode) or stream.read(8193) != unit_text(destination).encode():
+            return 'unit_mismatch'
+    return 'present'
 
 
 def service_state(operation):
@@ -44,10 +54,12 @@ def report(home=None, now=None):
     actions = []
     try:
         result['installation'] = installation_state(home)
-    except (OSError, ValueError):
+    except (OSError, ValueError, watch.SnapshotError):
         actions.append('Inspect unsafe installation locally; do not use sudo.')
-    if result['installation'] == 'partial':
+    if result['installation'] in ('partial', 'interrupted'):
         actions.append('From extracted source run: python3 -m deck.install uninstall --keep-config; then repeat setup.')
+    elif result['installation'] == 'unit_mismatch':
+        actions.append('Inspect the companion unit locally; it differs from the expected unit. Do not start it until reviewed. No automatic replacement is performed.')
     elif result['installation'] == 'missing':
         actions.append('Run setup explicitly from the extracted source.')
     result['service'] = service_state('is-active') if shutil.which('systemctl') else 'unavailable'
@@ -86,16 +98,19 @@ def report(home=None, now=None):
                     status = state.get('sync_status')
                     if status in ('synced', 'offline_or_rejected', 'pairing_or_consent_required'):
                         result['sync'] = status
-    except (OSError, ValueError, TypeError, KeyError):
+    except (OSError, ValueError, TypeError, KeyError, watch.SnapshotError):
         result['pairing'] = 'invalid_or_unreadable'
         actions.append('Inspect private configuration permissions locally; never share config or tokens.')
     if result['pairing'] in ('missing', 'expired') or result['sync'] == 'pairing_or_consent_required':
-        actions.append('Run pair with explicit server, AppID, mode and file; approve on your phone. Then explicitly restart the user service.')
+        if result['installation'] == 'present':
+            actions.append('Run pair with explicit server, AppID, mode and file; approve on your phone. Then explicitly restart the user service.')
+        else:
+            actions.append('Recover or review the installation first; then run doctor again before pairing or starting the service.')
     if result['selected_file'] in ('changing', 'missing_unsafe_or_unreadable'):
         actions.append('Wait for saving to finish; verify your selected regular file locally. To change selection, pair again.')
     if result['sync'] == 'offline_or_rejected':
         actions.append('Check Deck connectivity and the service /setup page. A sleeping host may take a minute; the bounded queue retries automatically.')
-    if result['service'] != 'active':
+    if result['installation'] == 'present' and result['service'] != 'active':
         actions.append('In normal-user Desktop Mode check the user session. After pairing, explicitly enable/start or restart steam-game-companion.service if desired.')
     result['actions'] = actions
     return result

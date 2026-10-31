@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import tempfile
+import subprocess
 import unittest
 import urllib.error
 from unittest.mock import patch
@@ -192,12 +193,12 @@ class DeckTests(unittest.TestCase):
         unit.write_text('synthetic unit')
         config.mkdir()
         (config / 'config.json').write_text('synthetic credential')
-        with patch('deck.install.subprocess.run'), contextlib.redirect_stdout(io.StringIO()):
+        with patch('deck.install.subprocess.run', return_value=subprocess.CompletedProcess([], 0)), contextlib.redirect_stdout(io.StringIO()):
             uninstall(home, remove_config=False)
         self.assertTrue(config.exists())
         self.assertTrue(self.save.exists())
         self.assertFalse(destination.exists())
-        with patch('deck.install.subprocess.run'), contextlib.redirect_stdout(io.StringIO()):
+        with patch('deck.install.subprocess.run', return_value=subprocess.CompletedProcess([], 4, stdout='unknown')), contextlib.redirect_stdout(io.StringIO()):
             uninstall(home, remove_config=True)
         self.assertFalse(config.exists())
         self.assertTrue(self.save.exists())

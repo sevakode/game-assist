@@ -23,6 +23,7 @@ MAX_TOKEN_ROWS = 100_000
 MAX_SUBJECT_TOKEN_ROWS = 16_384
 MAX_SUBJECT_CODES = 20
 MAX_CODE_ROWS = 2_000
+OAUTH_SCOPES = ('progress.read', 'library.read')
 
 
 def digest(value):
@@ -56,16 +57,21 @@ class OAuthProvider:
 
     async def register_client(self, client_info):
         redirects = [str(x) for x in client_info.redirect_uris or []]
+        requested_scopes = (list(OAUTH_SCOPES) if client_info.scope is None
+                            else client_info.scope.split())
         if not redirects or any(x not in self.redirect_uris for x in redirects):
             raise RegistrationError('invalid_redirect_uri', 'Redirect is not operator-approved')
         if (client_info.token_endpoint_auth_method != 'none' or client_info.client_secret
             or set(client_info.grant_types) - {'authorization_code', 'refresh_token'}
             or 'authorization_code' not in client_info.grant_types
             or client_info.response_types != ['code']
-            or set((client_info.scope or '').split()) - {'progress.read'}
+            or set(requested_scopes) - set(OAUTH_SCOPES)
+            or 'progress.read' not in requested_scopes
             or not client_info.client_id):
-            raise RegistrationError('invalid_client_metadata', 'Public PKCE clients with progress.read only')
-        client_info.scope = 'progress.read'
+            raise RegistrationError('invalid_client_metadata', 'Public PKCE clients with supported read scopes only')
+        # New registration capabilities are not user consent or token grants.
+        # Existing client rows are never updated, and explicit scope is retained.
+        client_info.scope = ' '.join(dict.fromkeys(requested_scopes))
         with self.db() as db:
             if db.execute('SELECT count(*) FROM oauth_clients').fetchone()[0] >= 10000:
                 raise RegistrationError('invalid_client_metadata', 'Registration capacity reached')
@@ -79,8 +85,10 @@ class OAuthProvider:
             or not re.fullmatch(r'[A-Za-z0-9_-]{43}', params.code_challenge)
             or params.resource != self.resource):
             raise AuthorizeError('invalid_request', 'Explicit redirect, state, S256 PKCE and resource required')
-        if params.scopes != ['progress.read']:
-            raise AuthorizeError('invalid_scope', 'progress.read required')
+        if (not params.scopes or 'progress.read' not in params.scopes or len(params.scopes) != len(set(params.scopes))
+            or set(params.scopes) - set(OAUTH_SCOPES)
+            or set(params.scopes) - set((client.scope or 'progress.read').split())):
+            raise AuthorizeError('invalid_scope', 'Registered read scopes and progress.read required')
         request_id = secrets.token_urlsafe(32)
         data = params.model_dump(mode='json') | {'client_id': client.client_id}
         with self.db() as db:
@@ -96,7 +104,7 @@ class OAuthProvider:
             row = db.execute('SELECT data FROM oauth_pending WHERE id=? AND expires>?', (digest(request_id), self.clock())).fetchone()
         return json.loads(row['data']) if row else None
 
-    def approve(self, request_id, subject):
+    def approve(self, request_id, subject, *, granted_scopes=('progress.read',)):
         if not subject or len(subject) > 128:
             raise ValueError('Invalid subject')
         with self.db() as db:
@@ -104,6 +112,11 @@ class OAuthProvider:
             if not row:
                 raise ValueError('Expired or consumed authorization request')
             data = json.loads(row['data'])
+            granted = list(granted_scopes)
+            if ('progress.read' not in granted or len(granted) != len(set(granted))
+                or set(granted) - set(data['scopes'])):
+                raise ValueError('Consent must retain progress and cannot expand requested scopes')
+            data['scopes'] = granted
             state = data.pop('state')
             db.execute('DELETE FROM oauth_codes WHERE expires<=?', (self.clock(),))
             if (db.execute('SELECT count(*) FROM oauth_codes').fetchone()[0] >= MAX_CODE_ROWS
@@ -175,6 +188,8 @@ class OAuthProvider:
         return None
 
     async def exchange_refresh_token(self, client, refresh_token, scopes):
+        if 'progress.read' not in scopes:
+            raise TokenError('invalid_scope', 'progress.read must be retained')
         rejected = False
         result = None
         with self.db() as db:
