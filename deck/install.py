@@ -49,7 +49,7 @@ def preflight():
     if importlib.util.find_spec('venv') is None or shutil.which('systemctl') is None:
         raise ValueError('Python venv and systemctl are required; do not modify the SteamOS system image')
     subprocess.run(['systemctl', '--user', 'show-environment'], check=True,
-                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15)
 
 
 def install(home, source):
@@ -71,7 +71,8 @@ def install(home, source):
     unit.parent.mkdir(parents=True, exist_ok=True)
     unit.write_text(unit_text(destination))
     unit.chmod(0o600)
-    subprocess.run(['systemctl', '--user', 'daemon-reload'], check=True)
+    subprocess.run(['systemctl', '--user', 'daemon-reload'], check=True, timeout=15,
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     print('Installed for this user only. Pair explicitly, then enable/start the user service.')
 
 
@@ -79,13 +80,15 @@ def uninstall(home, remove_config):
     destination, unit, config = paths(home)
     for path in (destination, unit, config):
         require_safe(path)
-    subprocess.run(['systemctl', '--user', 'disable', '--now', NAME + '.service'], check=False)
+    subprocess.run(['systemctl', '--user', 'disable', '--now', NAME + '.service'], check=False, timeout=15,
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     unit.unlink(missing_ok=True)
     if destination.exists():
         shutil.rmtree(destination)
     if remove_config and config.exists():
         shutil.rmtree(config)
-    subprocess.run(['systemctl', '--user', 'daemon-reload'], check=True)
+    subprocess.run(['systemctl', '--user', 'daemon-reload'], check=True, timeout=15,
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     print('Companion removed. Original game saves were not touched.')
 
 
@@ -107,7 +110,7 @@ def main(argv=None):
             install(Path.home(), Path(__file__).resolve().parents[1])
         else:
             uninstall(Path.home(), args.remove_config)
-    except (OSError, ValueError, subprocess.CalledProcessError):
+    except (OSError, ValueError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
         print('Installer could not finish. Python venv and an active systemctl --user session are required. Use normal-user Desktop Mode; do not use sudo or change the SteamOS image. Inspect any partial user installation; no game saves were changed.')
         return 1
     return 0

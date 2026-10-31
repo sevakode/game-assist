@@ -11,6 +11,8 @@ import secrets
 import time
 from urllib.parse import urlsplit
 from .database import Database
+from .auth_response import with_issuer
+from pydantic import AnyHttpUrl
 
 from mcp.server.auth.provider import (AccessToken, AuthorizationCode, AuthorizationParams,
     AuthorizeError, RefreshToken, RegistrationError, TokenError, construct_redirect_uri)
@@ -31,6 +33,9 @@ class OAuthProvider:
     def __init__(self, db_path, issuer, redirect_uris, clock=time.time, database=None):
         self.db_path = str(db_path)
         self.issuer = issuer.rstrip('/')
+        # Discovery serializes an origin with a trailing slash. Keep origin and
+        # resource bindings unchanged, but use exactly that serialized issuer.
+        self.authorization_issuer = str(AnyHttpUrl(self.issuer))
         self.resource = self.issuer + '/mcp'
         self.redirect_uris = frozenset(redirect_uris)
         self.clock = clock
@@ -107,7 +112,8 @@ class OAuthProvider:
             code = secrets.token_urlsafe(32)
             auth = AuthorizationCode(code='', expires_at=self.clock()+120, subject=subject, **data)
             db.execute('INSERT INTO oauth_codes VALUES (?,?,?)', (digest(code), auth.model_dump_json(), auth.expires_at))
-        return construct_redirect_uri(str(auth.redirect_uri), code=code, state=state)
+        return with_issuer(construct_redirect_uri(str(auth.redirect_uri), code=code, state=state),
+                           self.authorization_issuer)
 
     async def load_authorization_code(self, client, authorization_code):
         with self.db() as db:

@@ -36,6 +36,7 @@ from starlette.concurrency import run_in_threadpool
 from server.app import SaveSummary
 from server.steam import SteamService, SteamError
 from .oauth import OAuthProvider
+from .auth_response import identify_authorization_errors
 from .database import Database
 from .achievements import AchievementReader
 from .library_reader import LibraryReader
@@ -946,9 +947,11 @@ def create_app(config=None, steam=None, database=None, download_dir=None, achiev
     async def metadata(request):
         data=build_metadata(AnyHttpUrl(config.issuer),None,registration,revocation).model_dump(mode='json',exclude_none=True)
         data['token_endpoint_auth_methods_supported']=['none']
+        data['authorization_response_iss_parameter_supported']=True
         return JSONResponse(data)
 
     app=mcp.streamable_http_app()
+    identify_authorization_errors(app.routes, provider.authorization_issuer)
     app.add_exception_handler(HTTPException,browser_http_exception)
     app.routes.insert(0,Route('/.well-known/oauth-authorization-server',metadata))
     app.routes.extend([Route('/import',manual_import_page),Route('/assets/import.js',import_script),Route('/assets/belmont-parser.js',parser_script),Route('/v1/browser/observations',manual_import,methods=['POST']),Route('/assets/console.css',stylesheet),Route('/setup',setup_page),Route('/downloads/deck-companion.zip',download),Route('/downloads/deck-companion.zip.sha256',download_checksum),Route('/healthz',health),Route('/',home),Route('/games',games),Route('/connect/claude',connect_claude),Route('/login',login),Route('/steam/callback',callback),

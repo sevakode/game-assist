@@ -82,6 +82,50 @@ than the configured site are denied. Native/server clients do not need CORS.
 
 Tests: `python -m unittest discover -s tests -p 'test_remote*.py' -v`.
 
+## AI-client acceptance and issuer identification
+
+Claude's supported path is DCR: use **Register automatically**, then **Sign in
+now**, with `https://game-assist.onrender.com/mcp`. Its exact approved callback
+is `https://claude.ai/api/mcp/auth_callback`. CIMD is not implemented. A local
+synthetic registration using that callback never contacts or registers anything
+at Claude; it is a protocol contract, not evidence of a real client connection.
+
+The local RFC 9207 adapter targets pinned `mcp==1.29.0`. Discovery advertises
+`authorization_response_iss_parameter_supported: true`; successful consent and
+SDK-generated authorization error redirects carry one `iss`, exactly matching
+the authorization metadata issuer and protected-resource `authorization_servers`.
+Pydantic serializes the origin issuer with `/`, so the production-shaped value
+is `https://game-assist.onrender.com/`. Origin checks and the `/mcp` resource keep
+their existing values. The adapter decorates existing SDK error redirects only;
+it does not choose callbacks, redirect local errors, or alter Steam/consent hops.
+Re-run these contracts when upgrading the SDK.
+
+This prepares one ChatGPT compatibility requirement; it does not establish live
+ChatGPT support. Copy the exact callback from the client's management page and
+obtain separate operator approval before changing the production allowlist.
+Stable callbacks apply only to eligible clients. See the official
+[issuer identification guidance](https://developers.openai.com/plugins/build/auth#protect-callbacks-with-issuer-identification).
+
+Owner's live Claude checklist (still open):
+
+1. Connect the MCP endpoint with automatic registration; complete real Steam
+   OpenID and the separate `progress.read` consent. Confirm the return to Claude.
+2. Call the actual `get_progress` tool before granting data access. Expect unknown
+   or empty data, never invented progress. Record tool success, not model prose.
+3. Select Belmont, explicitly permit its summary, preview a compatible local save
+   in `/import`, then confirm sending the four-field projection. Call `get_progress`
+   again; verify those fields and `browser_manual` provenance only.
+4. Revoke the game's access and call again: the summary must disappear. After
+   normal token refresh it must remain absent. Test full account revoke separately:
+   the existing connection must fail; refresh cannot restore it. A fresh consent
+   may reconnect but cannot restore deleted observations.
+5. Confirm a normal refresh after the ten-minute access lifetime in the real
+   client. Keep tokens, callback codes, Steam identity and saves out of evidence.
+
+Steam OpenID supplies identity, not Cloud saves. The Deck companion is optional;
+Steam Web API achievements/library remain unavailable without the separately
+configured key and permission. None of the local tests closes the real-client gate.
+
 ## Prototype storage bounds
 
 Only the latest summary per owner/game is retained. `received_at` is server receipt

@@ -16,6 +16,7 @@ from starlette.applications import Starlette
 from starlette.testclient import TestClient
 
 from remote_server.oauth import OAuthProvider
+from remote_server.auth_response import with_issuer, identify_authorization_errors
 
 ISSUER = 'https://assist.example'
 REDIRECT = 'https://client.example/callback'
@@ -42,6 +43,47 @@ def issue_code(provider, client, subject='user-a'):
 
 
 class OAuthTests(unittest.TestCase):
+    def test_issuer_decoration_preserves_query_and_is_idempotent(self):
+        location = REDIRECT + '?context=&context=two&iss=old&iss=duplicate&state=a%26b'
+        decorated = with_issuer(location, ISSUER+'/')
+        self.assertEqual(with_issuer(decorated, ISSUER+'/'), decorated)
+        self.assertEqual(parse_qs(urlsplit(decorated).query, keep_blank_values=True),
+            {'context':['','two'], 'iss':[ISSUER+'/'], 'state':['a&b']})
+
+    def test_sdk_error_adapter_keeps_validation_and_internal_redirects(self):
+        from unittest.mock import patch
+        provider, client = self.oauth
+        routes = create_auth_routes(provider, AnyHttpUrl(ISSUER))
+        identify_authorization_errors(routes, provider.authorization_issuer)
+        with TestClient(Starlette(routes=routes), base_url=ISSUER, follow_redirects=False) as http:
+            params = dict(client_id=client.client_id, redirect_uri=REDIRECT,
+                response_type='code', state='state', scope='progress.read',
+                code_challenge=CHALLENGE, code_challenge_method='S256',resource=ISSUER+'/mcp')
+            # Includes SDK early-validation fallback and provider error paths.
+            for missing in ('response_type','code_challenge','redirect_uri','resource'):
+                values = {key:value for key,value in params.items() if key != missing}
+                response = http.get('/authorize',params=values)
+                self.assertEqual(response.status_code,302)
+                self.assertEqual(parse_qs(urlsplit(response.headers['location']).query)['iss'],[ISSUER+'/'])
+            with patch.object(provider,'authorize',side_effect=AuthorizeError('access_denied','Cancelled')):
+                response = http.get('/authorize',params=params)
+                query = parse_qs(urlsplit(response.headers['location']).query)
+                self.assertEqual(query['error'],['access_denied'])
+                self.assertEqual(query['iss'],[ISSUER+'/'])
+            with patch.object(provider,'authorize',side_effect=RuntimeError('synthetic internal failure')):
+                response = http.get('/authorize',params=params)
+                query = parse_qs(urlsplit(response.headers['location']).query)
+                self.assertEqual(query['error'],['server_error'])
+                self.assertEqual(query['iss'],[ISSUER+'/'])
+            for changes in ({'client_id':'missing'}, {'redirect_uri':REDIRECT+'/different'},
+                            {'redirect_uri':'invalid'}):
+                response = http.get('/authorize',params=params | changes)
+                self.assertEqual(response.status_code,400)
+                self.assertNotIn('location',response.headers)
+            response = http.get('/authorize',params=params)
+            self.assertTrue(response.headers['location'].startswith(ISSUER+'/oauth/consent?request='))
+            self.assertNotIn('iss=',response.headers['location'])
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)

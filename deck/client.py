@@ -74,12 +74,13 @@ class Transport:
 
 class Store:
     """Private own-state only. Reject symlink parents and non-private files."""
-    def __init__(self, directory=DEFAULT_HOME):
+    def __init__(self, directory=DEFAULT_HOME, *, create=True):
         self.directory = Path(directory).absolute()
         for part in reversed((self.directory, *self.directory.parents)):
             if part.exists() and part.is_symlink():
                 raise ValueError('State directory must not contain symlinks')
-        self.directory.mkdir(parents=True, mode=0o700, exist_ok=True)
+        if create:
+            self.directory.mkdir(parents=True, mode=0o700, exist_ok=True)
         st = self.directory.stat()
         if st.st_uid != os.getuid() or stat.S_IMODE(st.st_mode) & 0o077:
             raise ValueError('State directory must be owned by you and mode 0700')
@@ -221,7 +222,14 @@ def pair(store, transport, path, sleep=time.sleep, monotonic=time.monotonic, *, 
         sleep(interval)
         if monotonic() >= until:
             break
-        result = transport.post('/v1/devices/pair/poll', {'device_code': start['device_code']})
+        try:
+            result = transport.post('/v1/devices/pair/poll', {'device_code': start['device_code']})
+        except (urllib.error.URLError, OSError) as error:
+            if isinstance(error, urllib.error.HTTPError) and error.code not in (408, 429, 500, 502, 503, 504):
+                raise ValueError('Pairing rejected; start a new explicit pairing') from None
+            print('Pairing connection unavailable; retrying within the original code lifetime. Existing pairing is unchanged.')
+            interval = min(60, interval * 2)
+            continue
         if result.get('status') == 'pending':
             interval = min(60, max(5, int(result.get('interval', interval))))
             continue
@@ -230,6 +238,8 @@ def pair(store, transport, path, sleep=time.sleep, monotonic=time.monotonic, *, 
             raise ValueError('Pairing denied or expired')
         if type(result.get('appid')) is not int or result['appid'] != appid or result.get('scopes') != [scope]:
             raise ValueError('Approved game/scope does not match requested selection')
+        # Selection may have disappeared or become a symlink during phone approval.
+        signature(path, MAX_METADATA_BYTES if mode == 'metadata' else belmont.MAX_BYTES)
         generation = uuid.uuid4().hex
         with store.lock():
             if store.read('config.json').get('pairing_id') != previous_generation:
@@ -238,6 +248,8 @@ def pair(store, transport, path, sleep=time.sleep, monotonic=time.monotonic, *, 
             store.write('state.json', {'pairing_id': generation, 'appid': appid, 'mode': mode})
         # Generation binding rejects old queues even if interrupted between writes.
         print('Device paired. Private credential saved; no raw save data will be uploaded.')
+        if previous:
+            print('Restart the user service explicitly to use the new pairing; revoke the old device separately on the service.')
         return
     raise ValueError('Pairing expired; run pair again')
 
@@ -341,7 +353,7 @@ class Runner:
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('command', choices=('setup', 'discover', 'pair', 'run', 'status'))
+    parser.add_argument('command', choices=('setup', 'discover', 'pair', 'run', 'status', 'doctor'))
     parser.add_argument('--server', help='Explicit HTTPS service origin, required for pairing')
     parser.add_argument('--path', help='One explicitly selected regular save file; never a directory or archive to extract')
     parser.add_argument('--appid', type=int, help='Selected Steam AppID, 1..2147483647; required for pair, asked during setup')
@@ -354,6 +366,9 @@ def main(argv=None):
             selection(args.appid, args.mode or 'metadata')
         except ValueError as error:
             parser.error(str(error))
+    if args.command == 'doctor':
+        from .doctor import doctor
+        return doctor()
     if args.command == 'discover':
         from .discovery import discover
         if args.appid not in (None, 4231820):
@@ -381,6 +396,10 @@ def main(argv=None):
         config = store.read('config.json')
         if args.command == 'status':
             state = store.read('state.json')
+            if (state.get('pairing_id') != config.get('pairing_id')
+                    or state.get('appid', 4231820) != config.get('appid', 4231820)
+                    or state.get('mode', 'belmont-summary') != config.get('mode', 'belmont-summary')):
+                state = {}
             print(json.dumps({'paired': bool(config), 'sync_status': state.get('sync_status', 'not_synced'),
                               'observed_at': state.get('observed_at'), 'synced_at': state.get('synced_at'),
                               'queued': bool(state.get('queue')), 'appid': config.get('appid', 4231820) if config else None,

@@ -265,7 +265,7 @@ class BrowserFlowTests(unittest.TestCase):
             self.assertEqual(db.execute('SELECT count(*) FROM oauth_tokens').fetchone()[0],0)
         response=self.post('/oauth/consent',form['fields'])
         self.assertEqual(response.status_code,303)
-        self.assertEqual(urlsplit(response.headers['location']).netloc,'client.example')
+        self.assertEqual(urlsplit(response.headers['location']).netloc,urlsplit(service.REDIRECT).netloc)
         repeat=self.post('/oauth/consent',form['fields'])
         self.assertEqual(repeat.status_code,400)
         self.assertIn('text/html',repeat.headers['content-type'])

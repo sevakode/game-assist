@@ -9,7 +9,7 @@ import zipfile
 FILES = (
     'LICENSE', 'agent/watch.py', 'decoders/__init__.py', 'decoders/belmont.py',
     'deck/__init__.py', 'deck/__main__.py', 'deck/client.py', 'deck/discovery.py',
-    'deck/install.py', 'deck/setup.py',
+    'deck/install.py', 'deck/setup.py', 'deck/doctor.py',
 )
 README = '''# Game Assist Deck companion (source only)
 
@@ -32,6 +32,10 @@ Only one selected file/game is watched; re-pairing replaces it after confirmatio
 The file-to-game association is user-declared, not automatically verified.
 Approve only your own device. The setup asks
 before enabling the user-only background service. No game saves are modified.
+
+Run `python3 -m deck doctor` for local diagnostics without network requests, tokens,
+file paths or save contents. After an interrupted installation, follow its recovery
+actions. Offline pairing can be repeated; approve each new code explicitly.
 
 Do not disable SteamOS protections or install missing runtime components blindly.
 If Python/venv/user-systemd are missing, stop and use a separately reviewed solution.

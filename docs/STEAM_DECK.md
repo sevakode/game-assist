@@ -167,3 +167,93 @@ Only this companion's user installation/unit and optionally its config are
 removed; original saves remain untouched. Keeping config keeps a credential.
 Remote device revocation is a separate explicit action. No Windows support or
 installed/hardware-tested status is claimed.
+
+## Local doctor and recovery
+
+From the extracted source, or the installed source directory, run:
+
+```sh
+python3 -m deck doctor
+```
+
+Doctor emits a small JSON report with fixed status values and recovery actions.
+It does not install/start/stop anything, create configuration, contact the server,
+read save contents (even in summary mode), or print paths/tokens/queued payloads.
+Its exit code 0 means the report was produced, **not** that every check passed.
+`network: not_tested` and `summary_format: not_tested` are deliberate: a readable
+file does not prove format support, current consent or working phone integration.
+`installation: present` checks required files exist, not their code integrity.
+Each service query times out after five seconds; unavailable user-systemd is
+reported without exposing raw systemctl output. Installation/service mutations
+have a 15-second command timeout; a timeout may leave a completed or partial
+operation, so inspect with doctor before repeating it.
+
+| Report / situation | Explicit recovery |
+| --- | --- |
+| `installation: partial` | From extracted source: `python3 -m deck.install uninstall --keep-config`, then repeat setup. This stops/removes only companion files, retaining private pairing state. |
+| Installed but pairing interrupted | Run `pair` using the explicit server, AppID, mode and selected file as above. Setup does not overwrite an existing installation. |
+| `pairing: expired` or `sync: pairing_or_consent_required` | Re-pair with fresh phone approval; then explicitly restart the user service. Confirm the per-game scope on the service. |
+| `sync: offline_or_rejected` | Check connectivity and open the deployed `/setup` page. Free-host wake-up may take about a minute. The observation queue retains the latest permitted observation and retries; no extra permission is granted. |
+| Pairing start fails during cold start | No local pairing changed. Wait for the service to respond, then run `pair` again for a fresh code. |
+| Pair polling temporarily fails | Transient network/408/429/500/502/503/504 failures retry within the original bounded code lifetime, with polling delayed up to 60 seconds. Expired codes require a fresh explicit pairing. |
+| `selected_file: missing_unsafe_or_unreadable` | Verify the actual selected file locally after the game finishes saving. Directories, FIFO/special files and symlinks are refused. Changing selection requires pairing again. |
+| `queue: old_pairing_ignored` | A previous generation's queue will not be sent. Restart the service after successful pairing; new stable observations replace stale local state. |
+| `service: unavailable` | Use the normal user's Desktop Mode session; confirm Python/venv/user-systemd prerequisites. Do not use sudo or modify SteamOS protections. |
+
+A cancelled, denied or timed-out replacement keeps the previous local pairing
+until a new approval is committed. A previously running old service may continue
+under its old permission during this time: explicitly stop it first if desired.
+If interrupted between writing new config and resetting state, generation checks
+ignore the old queue. Successful pairing followed by a later setup/service error
+may already have saved the new credential: doctor distinguishes local pairing
+from service state. The original remote device must be revoked separately.
+Do not share config files, raw service logs, save files or private paths as a
+support report. Doctor is the intended redacted diagnostic surface.
+
+## Physical Steam Deck acceptance — still pending
+
+Use the reviewed ZIP on the Deck itself; no separate computer is required.
+Record SteamOS/Python version and status labels only. Do not record personal
+paths, pairing codes, tokens, screenshots containing them, or save contents.
+
+1. In normal-user Desktop Mode extract the reviewed ZIP and run doctor. Confirm
+   Python/venv and user-systemd availability. On a fresh device the installation
+   and pairing must be missing; doctor must not create them.
+2. Start the chosen game, save and exit. Locate the actual file locally; the
+   documented Proton suggestion is unverified. Select one physical regular file
+   and its AppID. Begin with metadata. Confirm on the phone the same game and
+   `saves.metadata`; decline service enablement once. Doctor must show local
+   pairing with no background service started by setup.
+3. Explicitly enable the service with the command above. Allow at least two
+   stable observations (initially 60 seconds apart; later idle intervals reach
+   ten minutes). Confirm the service receipt separately from the file mtime.
+   Metadata must show only size/time and unknown progress. Compare the selected
+   original locally before/after a read-only run; never upload the comparison.
+4. Stop the companion explicitly. Start a replacement pairing, cancel before
+   phone approval, and run doctor. The previous configuration must remain. Repeat
+   pairing, approve on the phone, and explicitly restart the service. Confirm
+   fresh observations are under the new selection only; revoke the old device.
+5. Disable Deck networking, make a legitimate in-game save, wait for stable
+   checks, then run doctor: expect a pending queue and offline/rejected status.
+   Restore networking; allow backoff (up to 72 minutes of retry backoff with jitter, plus
+   up to ten minutes before the next idle check) and verify a service receipt. No raw save should leave the Deck.
+   Repeat against a sleeping free host and record actual wake-up/delivery delay.
+6. With owner-authorized service enabled, test Desktop→Game Mode, save, suspend,
+   resume, then reboot independently. After each, check service state and new
+   receipts from the phone, recording observed latency. These are separate
+   hardware gates; passing local tests does not establish any of them.
+7. Revoke the device/consent on the service and make another legitimate save.
+   Confirm sending stops with re-pair required (exit 3, no restart loop).
+   Restore only through explicit pairing and scope approval. For token expiry,
+   use a controlled test service with short-lived credentials or wait for actual
+   expiry; never edit production credentials to simulate a result.
+8. If Belmont summary is desired, separately re-pair AppID 4231820 with
+   `belmont-summary` and `saves.summary` approval. Validate format 1.1.3 and only
+   the four permitted raw fields. Do not infer maxima, pickups or locations.
+9. Explicitly uninstall with `--keep-config`, confirm service stopped and original
+   save intact; reinstall/re-pair as needed. Finally test `--remove-config` and
+   remote device revocation separately. Record success/failure per step rather
+   than declaring complete Deck support from a partial run.
+
+This companion remains optional. It does not provide automatic Steam Cloud
+access, guarantee Game Mode persistence, or establish a mobile ChatGPT connector.

@@ -63,6 +63,13 @@ Use HTTPS on the public `api.steampowered.com` host: the [Web API overview](http
 
 ## What can proceed without more private inputs
 
+Local follow-up: [structural inspection and controlled comparisons](SAVE_INSPECTION.md)
+documents `decoders.inspection`, synthetic verification, and the remaining
+controlled-observation requirements. It adds no verified gameplay mapping or
+public MCP capability. ER signature recognition is not full header validation;
+W3 remains unsupported. Historical private fixtures described here are not
+available in the cloud development checkout used for this follow-up.
+
 - Build consent, stable-copy handling, version gates, parser interfaces, unknown/error states and synthetic tests for all three games now.
 - Retain Belmont's narrow `1.1.3` scalar reader. Do not enable pickup mapping until a controlled single-pickup before/after pair and independent in-game ground truth exist. A private baseline alone cannot establish the mapping.
 - Elden Ring: an authorized private fixture is now available for local validation. An experimental disabled-by-default adapter is implementable from permissive sources, but enabling verified gameplay facts still requires exact game build/platform/DLC/mod status and semantic fixture validation. No exact supported game-patch range was established here.

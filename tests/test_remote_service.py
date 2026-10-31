@@ -14,7 +14,7 @@ from remote_server.app import Config, create_app, COOKIE
 from decoders.belmont import decode_bytes, safe_summary
 
 ORIGIN='https://assist.example'
-REDIRECT='https://client.example/callback'
+REDIRECT='https://claude.ai/api/mcp/auth_callback'
 
 class FakeSteam:
     def login_url(self, return_to, realm):
@@ -61,7 +61,7 @@ class RemoteTests(unittest.TestCase):
         raw={'version':'1.1.3','playerSave':{'healthUpgradeFragmentCount':2,'manaUpgradeFragmentCount':3,'currentHealth':42,'currentMana':50}}
         return {'event_id':str(uuid4()),'appid':4231820,'kind':'save_summary','payload':safe_summary(decode_bytes(json.dumps(raw).encode()))}
 
-    def oauth(self):
+    def oauth(self, full=False):
         r=self.client.post('/register',json={'redirect_uris':[REDIRECT],'token_endpoint_auth_method':'none','grant_types':['authorization_code','refresh_token'],'response_types':['code'],'scope':'progress.read'})
         self.assertEqual(r.status_code,201,r.text)
         cid=r.json()['client_id']
@@ -76,7 +76,106 @@ class RemoteTests(unittest.TestCase):
         code=parse_qs(urlsplit(r.headers['location']).query)['code'][0]
         r=self.client.post('/token',data={'client_id':cid,'grant_type':'authorization_code','code':code,'redirect_uri':REDIRECT,'code_verifier':verifier,'resource':ORIGIN+'/mcp'})
         self.assertEqual(r.status_code,200,r.text)
-        return r.json()['access_token']
+        return (cid, r.json()) if full else r.json()['access_token']
+
+    def test_dcr_progress_refresh_and_account_revoke(self):
+        self.sign_in()
+        cid, tokens = self.oauth(full=True)
+        def progress(token):
+            return self.mcp(token, 'tools/call', {'name':'get_progress','arguments':{}})
+        empty = progress(tokens['access_token'])
+        self.assertEqual(empty.status_code, 200)
+        self.assertNotIn('currentHealth', empty.text)
+        # Consent and a synthetic four-field browser import, no raw save upload.
+        review = self.client.post('/account/games', data={
+            'csrf':self.csrf(), 'action':'review', 'game_4231820':'yes'},
+            headers={'origin':ORIGIN})
+        revision = re.search('name="catalog_revision" value="([^"]+)"',review.text)[1]
+        granted = self.client.post('/account/games', data={
+            'csrf':self.csrf(), 'action':'confirm', 'catalog_revision':revision,
+            'game_4231820':'yes', 'summary_4231820':'yes'},
+            headers={'origin':ORIGIN})
+        self.assertEqual(granted.status_code, 303, granted.text)
+        imported = self.client.post('/v1/browser/observations',
+            json=self.observation() | {'csrf':self.csrf()}, headers={'origin':ORIGIN})
+        self.assertEqual(imported.status_code, 200, imported.text)
+        result = progress(tokens['access_token'])
+        self.assertIn('currentHealth', result.text)
+        self.assertIn('browser_manual', result.text)
+        self.assertNotIn('76561198000000001', result.text)
+        def refresh(credentials):
+            return self.client.post('/token', data={'client_id':cid,
+                'grant_type':'refresh_token','refresh_token':credentials['refresh_token'],
+                'resource':ORIGIN+'/mcp'})
+        rotated = refresh(tokens)
+        self.assertEqual(rotated.status_code, 200, rotated.text)
+        self.assertEqual(progress(tokens['access_token']).status_code, 401)
+        self.assertIn('currentHealth', progress(rotated.json()['access_token']).text)
+        scoped_revoke = self.client.post('/account/games/revoke', data={
+            'csrf':self.csrf(),'appid':'4231820'}, headers={'origin':ORIGIN})
+        self.assertEqual(scoped_revoke.status_code,303)
+        self.assertNotIn('currentHealth', progress(rotated.json()['access_token']).text)
+        after_scope_revoke = refresh(rotated.json())
+        self.assertEqual(after_scope_revoke.status_code,200)
+        self.assertNotIn('currentHealth', progress(after_scope_revoke.json()['access_token']).text)
+        self.assertEqual(refresh(tokens).status_code, 400)  # replay revokes family
+        self.assertEqual(progress(after_scope_revoke.json()['access_token']).status_code, 401)
+        cid, tokens = self.oauth(full=True)
+        revoked = self.client.post('/account/revoke', data={'csrf':self.csrf()},
+            headers={'origin':ORIGIN})
+        self.assertEqual(revoked.status_code, 303)
+        self.assertEqual(progress(tokens['access_token']).status_code, 401)
+        self.assertEqual(refresh(tokens).status_code, 400)
+        fresh = self.oauth()
+        self.assertNotIn('currentHealth', progress(fresh).text)
+
+    def test_authorization_issuer_contract(self):
+        metadata = self.client.get('/.well-known/oauth-authorization-server').json()
+        resource = self.client.get('/.well-known/oauth-protected-resource/mcp').json()
+        issuer = metadata['issuer']
+        self.assertEqual(issuer, ORIGIN+'/')
+        self.assertEqual(resource['authorization_servers'], [issuer])
+        self.assertIs(metadata['authorization_response_iss_parameter_supported'], True)
+        cid = self.client.post('/register', json={'redirect_uris':[REDIRECT],
+            'token_endpoint_auth_method':'none'}).json()['client_id']
+        challenge=base64.urlsafe_b64encode(hashlib.sha256(('v'*64).encode()).digest()).decode().rstrip('=')
+        params={'client_id':cid,'redirect_uri':REDIRECT,'response_type':'code',
+            'scope':'progress.read','state':'state & unicode é','code_challenge':challenge,
+            'code_challenge_method':'S256','resource':ORIGIN+'/mcp'}
+        for method in ('GET','POST'):
+            def request(values):
+                return (self.client.get('/authorize',params=values) if method=='GET'
+                    else self.client.post('/authorize',data=values))
+            for changes in ({'response_type':'token'}, {'code_challenge_method':'plain'},
+                            {'scope':'other'}, {'code_challenge':'x'}, {'state':''}):
+                with self.subTest(method=method, changes=changes):
+                    response=request(params | changes)
+                    self.assertEqual(response.status_code,302,response.text)
+                    query=parse_qs(urlsplit(response.headers['location']).query,keep_blank_values=True)
+                    self.assertIn('error',query)
+                    self.assertEqual(query['iss'],[issuer])
+                    self.assertEqual(query['state'],[(params | changes)['state']])
+            for changes in ({'client_id':'unknown'}, {'redirect_uri':REDIRECT+'/other'},
+                            {'resource':ORIGIN+'/different'}):
+                response=request(params | changes)
+                self.assertEqual(response.status_code,400)
+                self.assertNotIn('location',response.headers)
+        response=self.client.get('/authorize',params=params)
+        consent=response.headers['location']
+        self.assertNotIn('iss=',consent)
+        login=self.client.get(consent)
+        self.assertEqual(login.status_code,303)
+        self.assertNotIn('iss=',login.headers['location'])
+        self.client.get(login.headers['location'])
+        state=parse_qs(urlsplit(self.steam.return_to).query)['state'][0]
+        callback=self.client.get('/steam/callback',params={'state':state,'test_identity':'76561198000000001'})
+        self.assertEqual(callback.headers['location'],urlsplit(consent).path+'?'+urlsplit(consent).query)
+        request_id=parse_qs(urlsplit(consent).query)['request'][0]
+        response=self.client.post('/oauth/consent',data={'csrf':self.csrf(path=consent),'request':request_id},headers={'origin':ORIGIN})
+        query=parse_qs(urlsplit(response.headers['location']).query)
+        self.assertEqual(query['iss'],[issuer])
+        self.assertEqual(query['state'],[params['state']])
+        self.assertIn('code',query)
 
     def mcp(self,token,method,params=None):
         return self.client.post('/mcp',json={'jsonrpc':'2.0','id':1,'method':method,'params':params or {}},headers={'authorization':'Bearer '+token,'accept':'application/json, text/event-stream'})
