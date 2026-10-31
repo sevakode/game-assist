@@ -134,7 +134,8 @@ class ConnectionDiagnosticTests(unittest.TestCase):
             self.assertEqual(logs.output,['ERROR:remote_server.database:GA_DB_CONNECT category=TLS_ROOTS attempt=1'])
             self.assertEqual(driver.connect.call_count,1);sleep.assert_not_called()
             self.assertEqual(driver.connect.call_args.kwargs['sslmode'],'verify-full')
-            self.assertEqual(driver.connect.call_args.kwargs['sslrootcert'],'system')
+            import certifi
+            self.assertEqual(driver.connect.call_args.kwargs['sslrootcert'],certifi.where())
             self.assertEqual(driver.connect.call_args.kwargs['connect_timeout'],5)
             for secret in (self.SECRET,'private-host.example','postgresql://'):
                 self.assertNotIn(secret,rendered+' '.join(logs.output))
@@ -181,3 +182,44 @@ class ConnectionDiagnosticTests(unittest.TestCase):
             with self.assertRaises(ConnectionUnavailable):
                 with self.postgres().transaction(): pass
             self.assertEqual(driver.connect.call_count,1);sleep.assert_not_called()
+
+
+class TrustedRootDiagnosticTests(unittest.TestCase):
+    SECRET = ConnectionDiagnosticTests.SECRET
+    fake_driver = ConnectionDiagnosticTests.fake_driver
+    fake_connection = ConnectionDiagnosticTests.fake_connection
+    postgres = ConnectionDiagnosticTests.postgres
+    def test_specific_tls_subcategories_are_constant_and_never_transient(self):
+        from remote_server.database import connection_failure_category, _TRANSIENT_CATEGORIES
+        cases={'SSL error: certificate verify failed: unable to get local issuer certificate':'TLS_ISSUER',
+               'SSL error: certificate verify failed: self-signed certificate':'TLS_SELF_SIGNED',
+               'SSL error: certificate verify failed: certificate has expired':'TLS_EXPIRED',
+               'server certificate does not match host name':'TLS_HOSTNAME',
+               'SSL error: wrong version number':'TLS_PROTOCOL',
+               'SSL error: alert handshake failure':'TLS_HANDSHAKE',
+               'SSL error: something unspecified':'TLS_OTHER',
+               'certificate verify failed':'TLS_VERIFY'}
+        for text,category in cases.items():
+            self.assertEqual(connection_failure_category(RuntimeError(text+' '+self.SECRET)),category)
+            self.assertNotIn(category,_TRANSIENT_CATEGORIES)
+
+    def test_system_dsn_root_uses_certifi_without_changing_channel_binding(self):
+        import certifi
+        from unittest.mock import patch
+        raw=self.fake_connection();driver=self.fake_driver([raw])
+        db=Database('unused','postgresql://test:test@private-host.example/game?sslmode=verify-full&sslrootcert=system&channel_binding=require')
+        with patch.dict('sys.modules',{'psycopg':driver}):
+            db.initialize()
+        self.assertEqual(driver.connect.call_args.kwargs['sslrootcert'],certifi.where())
+        self.assertEqual(driver.connect.call_args.kwargs['sslmode'],'verify-full')
+        self.assertIn('channel_binding=require',driver.connect.call_args.args[0])
+
+    def test_missing_trusted_bundle_fails_closed_without_connecting(self):
+        from unittest.mock import patch
+        from remote_server.database import ConnectionUnavailable
+        driver=self.fake_driver([])
+        with patch.dict('sys.modules',{'psycopg':driver}),patch('certifi.where',return_value='/nonexistent/synthetic-ca-file'),patch('remote_server.database.time.sleep') as sleep:
+            with self.assertLogs('remote_server.database',level='ERROR') as logs,self.assertRaises(ConnectionUnavailable):
+                self.postgres().initialize()
+            driver.connect.assert_not_called();sleep.assert_not_called()
+            self.assertEqual(logs.output,['ERROR:remote_server.database:GA_DB_CONNECT category=TLS_ROOTS attempt=1'])

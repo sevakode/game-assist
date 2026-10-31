@@ -111,7 +111,10 @@ exact client callbacks. `/healthz` reports process readiness, not
 an independently verified live connection to Steam or a mobile assistant.
 
 The PostgreSQL DSN must explicitly select `sslmode=verify-full`; the driver uses
-system trust unless an explicit root certificate is provided. A default Neon DSN
+the pinned certifi Mozilla CA bundle as an explicit trusted CA file when no root
+file is specified or `sslrootcert=system` is selected. This avoids bundled OpenSSL
+default-path ambiguity without disabling chain or hostname verification. An
+explicit operator-configured root file remains honored. A default Neon DSN
 with `sslmode=require` must be strengthened and tested, not silently accepted.
 Do not paste connection strings in chats/logs or commit them. Enter a reviewed DSN
 only in the hosting provider's secret settings after account/setup authorization.

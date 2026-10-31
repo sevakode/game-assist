@@ -23,7 +23,7 @@ _ADVISORY_LOCK_ID = 0x47414D4541535354
 
 
 _LOG = logging.getLogger(__name__)
-_FAILURE_CATEGORIES = frozenset({'TLS_ROOTS', 'TLS_VERIFY', 'AUTH', 'CHANNEL_BINDING', 'DNS', 'TIMEOUT', 'NETWORK', 'OTHER'})
+_FAILURE_CATEGORIES = frozenset({'TLS_ROOTS', 'TLS_VERIFY', 'TLS_ISSUER', 'TLS_SELF_SIGNED', 'TLS_EXPIRED', 'TLS_HOSTNAME', 'TLS_PROTOCOL', 'TLS_HANDSHAKE', 'TLS_OTHER', 'AUTH', 'CHANNEL_BINDING', 'DNS', 'TIMEOUT', 'NETWORK', 'OTHER'})
 _TRANSIENT_CATEGORIES = frozenset({'DNS', 'TIMEOUT', 'NETWORK'})
 
 
@@ -39,12 +39,26 @@ def connection_failure_category(error):
     message = str(error).lower()[:16384]
     state = getattr(error, 'sqlstate', None)
     state = state if isinstance(state, str) and re.fullmatch(r'[0-9A-Z]{5}', state) else ''
-    if any(term in message for term in ('channel binding', 'channel_binding')):
+    if any(term in message for term in ('channel binding', 'invalid channel_binding', 'channel_binding must')):
         return 'CHANNEL_BINDING'
     if any(term in message for term in ('root certificate file', 'sslrootcert', 'load root certificate', 'system root certificates', 'default certificate paths', 'no certificate or crl found')):
         return 'TLS_ROOTS'
-    if any(term in message for term in ('certificate verify failed', 'certificate verification failed', 'does not match host name', 'hostname mismatch', 'ssl error', 'tls error', 'certificate has expired', 'self-signed certificate')):
+    if any(term in message for term in ('does not match host name', 'hostname mismatch', 'host name mismatch', 'certificate is not valid for')):
+        return 'TLS_HOSTNAME'
+    if any(term in message for term in ('certificate has expired', 'certificate expired', 'certificate is not yet valid', 'certificate not yet valid')):
+        return 'TLS_EXPIRED'
+    if any(term in message for term in ('self-signed certificate', 'self signed certificate')):
+        return 'TLS_SELF_SIGNED'
+    if any(term in message for term in ('unable to get local issuer certificate', 'unable to get issuer certificate', 'unable to verify the first certificate', 'unknown ca', 'unknown certificate authority')):
+        return 'TLS_ISSUER'
+    if any(term in message for term in ('certificate verify failed', 'certificate verification failed')):
         return 'TLS_VERIFY'
+    if any(term in message for term in ('wrong version number', 'unsupported protocol', 'alert protocol version', 'no protocols available')):
+        return 'TLS_PROTOCOL'
+    if any(term in message for term in ('alert handshake failure', 'handshake failure', 'handshake failed')):
+        return 'TLS_HANDSHAKE'
+    if any(term in message for term in ('ssl error', 'tls error', 'ssl syscall error')):
+        return 'TLS_OTHER'
     if state.startswith('28') or any(term in message for term in ('password authentication failed', 'authentication failed', 'no pg_hba.conf entry', 'no password supplied', 'invalid password')):
         return 'AUTH'
     if any(term in message for term in ('could not translate host name', 'name or service not known', 'temporary failure in name resolution', 'nodename nor servname', 'getaddrinfo failed')):
@@ -159,8 +173,15 @@ class Transaction:
                 kwargs = {'connect_timeout': 5, 'client_encoding': 'UTF8'}
                 if not self.database.allow_insecure_test:
                     kwargs['sslmode'] = 'verify-full'
-                    if 'sslrootcert' not in self.database.options:
-                        kwargs['sslrootcert'] = 'system'
+                    if self.database.options.get('sslrootcert') in (None, 'system'):
+                        # Pinned certifi supplies Mozilla's public trust roots.
+                        # An explicit CA file avoids bundled OpenSSL build-path
+                        # ambiguity; hostname verification remains mandatory.
+                        import certifi
+                        roots = certifi.where()
+                        if not Path(roots).is_file():
+                            raise ConnectionUnavailable('TLS_ROOTS')
+                        kwargs['sslrootcert'] = roots
                 failure_category = None
                 try:
                     self.raw = psycopg.connect(self.database.database_url, **kwargs)
