@@ -455,7 +455,7 @@ def create_app(config=None, steam=None, database=None, download_dir=None, achiev
             requested=request.query_params.get('game')
             if requested is not None and requested not in {str(i) for i in DISCOVERY_TITLES}:
                 raise HTTPException(404,'Public game preset unavailable')
-            return page('Игровой спутник', ui.landing_body(selected_appid=int(requested) if requested else None,discovery_catalog=discovery_catalog()))
+            return page('Игровой спутник', ui.landing_body(selected_appid=int(requested) if requested else None,discovery_catalog=discovery_catalog(),mcp_url=config.issuer+'/mcp'))
         inbox = store.inbox(session['owner'])
         catalog = store.catalog(session['owner'])
         requested = request.query_params.get('game')
@@ -943,3 +943,4 @@ def create_app(config=None, steam=None, database=None, download_dir=None, achiev
     app.add_middleware(TrustedHostMiddleware,allowed_hosts=[urlsplit(config.issuer).hostname])
     app.state.store,app.state.provider,app.state.config=store,provider,config
     return app
+

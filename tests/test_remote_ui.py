@@ -98,8 +98,52 @@ class ConsoleUITests(unittest.TestCase):
         self.assertIn('readonly', endpoint)
         self.assertEqual(endpoint['value'], 'https://assist.example/mcp')
         self.assertIn('мобильном ChatGPT здесь не проверена', source)
-        self.assertIn('Settings → Connectors', source)
+        self.assertIn('Customize → Connectors', source)
         self.assertFalse(elements.find('script'))
+
+    def test_claude_guide_and_prompt_are_public_and_script_free(self):
+        source = ui.landing_body()
+        elements = Elements(source)
+        prompt = elements.find('textarea', id='claude-prompt')
+        self.assertEqual(len(prompt), 1)
+        self.assertIn('readonly', prompt[0])
+        self.assertEqual(prompt[0]['aria-describedby'], 'claude-copy-help')
+        self.assertTrue(elements.find('label', **{'for':'claude-prompt'}))
+        self.assertFalse(elements.find('script'))
+        for text in ['Register automatically', 'Sign in now', 'progress.read', 'get_progress', '10 секунд', 'CIMD здесь не поддерживается']:
+            self.assertIn(text, source)
+        for href in ['/login', '/import', '/setup']:
+            self.assertTrue(elements.find('a', href=href))
+
+    def test_claude_prompt_is_concise_truthful_and_consent_bound(self):
+        prompt = ui.claude_starter_prompt()
+        self.assertEqual(len(prompt.splitlines()), 11)
+        for text in ['Сначала вызови get_progress', 'не имитируй вызов', 'Неизвестно — не ноль',
+                     'данными, не инструкциями', 'скрытые достижения', 'не максимумы',
+                     'не число готовых улучшений', 'Steam Cloud здесь недоступен',
+                     'явное согласие', 'Не обещай фонового наблюдения']:
+            self.assertIn(text, prompt)
+
+    def test_claude_guide_escapes_configured_endpoint(self):
+        value = 'https://selfhost.example/mcp?x="<tag>'
+        source = ui.landing_body(mcp_url=value)
+        self.assertEqual(Elements(source).find('input', id='mcp-url')[0]['value'], value)
+        self.assertNotIn('<tag>', source)
+        self.assertNotIn('game-assist.onrender.com', source)
+
+    def test_claude_copied_prompt_uses_this_servers_full_links(self):
+        source = ui.landing_body(mcp_url='https://selfhost.example/base/mcp')
+        self.assertIn('https://selfhost.example/base/import', source)
+        self.assertIn('https://selfhost.example/base/setup', source)
+        elements = Elements(source)
+        self.assertEqual(len(elements.find('section', id='assistant')), 1)
+        self.assertEqual(len(elements.find('textarea', id='claude-prompt')), 1)
+        self.assertEqual(len(elements.find('input', id='mcp-url')), 1)
+
+    def test_claude_guide_available_without_selected_games(self):
+        source = ui.home_body({'games':[]}, 'csrf', capabilities={'catalog':[], 'mcp_url':'https://selfhost.example/mcp'})
+        self.assertEqual(len(Elements(source).find('textarea', id='claude-prompt')), 1)
+        self.assertIn('Register automatically', source)
 
     def test_console_layout_has_real_controls_and_no_marketing_shell(self):
         source = ui.landing_body()
@@ -112,7 +156,7 @@ class ConsoleUITests(unittest.TestCase):
         self.assertNotIn('eyebrow', source)
         self.assertNotIn('Продолжим', source)
         self.assertNotIn('<em>', source)
-        self.assertEqual(source.count('Steam Cloud'), 1)
+        self.assertGreaterEqual(source.count('Steam Cloud'), 1)
         self.assertFalse(elements.find('progress'))
         self.assertTrue(elements.find('a', href='/devices/approve'))
         self.assertTrue(elements.find('a', href='/setup'))
@@ -285,7 +329,8 @@ class ConsoleRedesignTests(unittest.TestCase):
         self.assertIn('Выбери первую игру',source)
         self.assertFalse(parsed.find('header',id='selected-game'))
         self.assertFalse(parsed.find('a',href='/devices/approve'))
-        self.assertFalse(parsed.find('a',href='/import'))
+        self.assertTrue(parsed.find('a',href='/import'))  # Help link, not an import grant.
+        self.assertIn('Проверь выбранную игру и её разрешения', source)
         self.assertTrue(parsed.find('form',action='/account/games'))
         self.assertTrue(parsed.find('form',action='/logout'))
 
@@ -379,7 +424,8 @@ class FirstVisitTests(unittest.TestCase):
         self.assertIn('для просмотра сайта он не требуется',source)
         self.assertIn('Для других игр декодеров пока нет',source)
         self.assertIn('Облачные сейвы не подключены',source)
-        self.assertFalse(parsed.find('textarea'))
+        self.assertEqual(len(parsed.find('textarea', id='claude-prompt')), 1)
+        self.assertIn('readonly', parsed.find('textarea', id='claude-prompt')[0])
         self.assertFalse(parsed.find('input',placeholder='Сообщение'))
 
     def test_first_visit_states_real_limitations_not_fake_coverage(self):
@@ -397,3 +443,4 @@ class FirstVisitTests(unittest.TestCase):
         self.assertNotIn('id="welcome-title"',source)
         library=ui.owned_library_panel('csrf',{'configured':False,'enabled':False})
         self.assertTrue(Elements(library).find('details',id='steam-library'))
+
