@@ -43,6 +43,7 @@ SCHEMA = {'sqlite': SQLITE_SCHEMA, 'postgres': POSTGRES_SCHEMA}
 
 # Identifiers and definitions are constants, never supplied by requests/DSNs.
 _ADDITIVE_COLUMNS = {
+    'observations_v2': {'source': "TEXT NOT NULL DEFAULT 'device'"},
     'pairings': {
         'appid': 'INTEGER NOT NULL DEFAULT 4231820',
         'requested_scopes': "TEXT NOT NULL DEFAULT '[\"saves.summary\"]'",

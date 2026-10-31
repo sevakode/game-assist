@@ -48,6 +48,7 @@ class UniversalMigrationTests(unittest.TestCase):
             self.assertEqual(db.execute('SELECT count(*) FROM observations_v2').fetchone()[0],1)
             self.assertEqual(db.execute('SELECT owner,observed FROM observations_v2').fetchone()[0],'owner-a')
             self.assertEqual(db.execute('SELECT observed FROM observations_v2').fetchone()[0],1700000000.125)
+            self.assertEqual(db.execute('SELECT source FROM observations_v2').fetchone()[0],'device')
             self.assertEqual(db.execute('SELECT count(*) FROM observations').fetchone()[0],2)
             self.assertIsNone(db.execute("SELECT 1 FROM grants WHERE scope='saves.metadata'").fetchone())
             self.assertIsNone(db.execute('SELECT 1 FROM devices WHERE hash=?',('metadata',)).fetchone())

@@ -1,5 +1,36 @@
 # Остаток до готового продукта
 
+**Порядок дальнейшей работы и критерии готовности:** [ROADMAP.md](ROADMAP.md).
+После каждого проверенного релиза продолжаем следующий незаблокированный срез;
+публикация не означает завершение продукта.
+
+## Ближайшая очередь (2026-10-31)
+
+1. **IMP-01/02/03 реализованы локально:** browser-local preview и отдельно
+   подтверждаемая scope-checked projection-only отправка; security review и
+   synthetic cancel/parity tests прошли. Итоговая локальная regression прошла; release freeze и публикация
+   ещё впереди. Затем **IMP-04:** реальный manual flow на телефоне. Это fallback,
+   не автоматический Steam Cloud.
+2. **BEL-01…04:** controlled before/after HP/маны, точный build, независимое
+   наблюдение и один проверенный knowledge mapping; не догадки по счётчикам.
+3. **ER/W3:** permissive dependency review и версии/семантика; приватная ER
+   fixture есть, W3 fixture отсутствует. Не исполнять community profiles как код.
+4. **ACH/CLD:** mock-tested контракты сейчас; live достижения, Cloud source,
+   scheduler и доставка — только после отдельных credential/consent gates.
+5. **OPS/DECK/COM:** mobile acceptance, retention/security/cost, физический Deck
+   и небольшие проверяемые community вклады.
+
+Universal release `33badaca909f539f63d38114775ff40cf4a22152` опубликован на Render
+2026-10-31 в 18:22:37 UTC; [CI](https://github.com/sevakode/game-assist/actions/runs/41228842316).
+Подтверждён checkpoint **297 тестов, включая настоящий одноразовый PostgreSQL**.
+Публичная game-focus/back navigation визуально проверена; phone/authenticated
+acceptance остаётся открытой. Это не 297 PostgreSQL-тестов и не live Cloud acceptance.
+Следующий manual-import релиз пока локальный: **314 тестов за 20.626 s, настоящий
+PostgreSQL, 0 skips, PASS**; compile/JS syntax/parser/UI/catalog/profile checks
+прошли. Его commit/CI/deploy фиксируются отдельно; публикации ещё не было. Универсальные AppID/права и generic
+metadata не означают универсальные парсеры; Belmont остаётся четырьмя scalar-полями
+формата 1.1.3. Детальные blockers и definition of done — в roadmap.
+
 Требования подтверждены в REQUIREMENTS.md: MIT, ChatGPT+сайт, shared/self-host, без спойлеров, нейтральные напоминания. Первая практическая цель — HP/мана Belmont’s Curse; реальные флаги требуют сейвов и проверки.
 
 ## Приоритет продукта
@@ -16,9 +47,9 @@
 - Скриншот с телефона указывает на успешный вход на сайте Steam; полный callback/привязка личности и OAuth-поток приложения ещё не подтверждены.
 
 ## Не закрыто
-- Реальный пользовательский Steam OpenID round-trip и API acceptance с разрешённым операторским доступом; библиотека/выбор нескольких и всех игр с отдельным согласием.
+- Реальный пользовательский Steam OpenID round-trip и API acceptance с разрешённым операторским доступом. Single/multiple/all-current выбор зарегистрированных игр и review scopes опубликованы в universal release; это не импорт принадлежащей пользователю Steam-библиотеки и не live acceptance.
 - Официально разрешённый Cloud-источник для конкретной игры, обнаружение версий, расписание с учётом сна free host и подтверждённый канал доставки на телефон.
-- Детектор безопасных изменений, дедупликация и inbox/очередь — работа в процессе; их готовность и новые тесты фиксируются отдельно. Inbox сайта сам по себе не означает push или самостоятельное сообщение ChatGPT/Claude.
+- Opt-in inbox сайта и ограниченные device-изменения опубликованы в universal release; реальные интеграции и live acceptance фиксируются отдельно. Inbox сайта сам по себе не означает push, Cloud ingestion или самостоятельное сообщение ChatGPT/Claude.
 - Реальная OAuth/PKCE приёмка Claude/ChatGPT, отзыв, refresh/replay, изоляция пользователей и поддержка выбранного мобильного клиента.
 - Необязательный путь устройства: реальные тесты SteamOS/Game Mode, suspend/resume/offline/reboot, Windows watcher, установщики/автозапуск/подпись.
 - Фоновые обновления достижений и эксплуатационная проверка миграций/retention/audit в production.

@@ -236,3 +236,26 @@ modified by preparing these source files; the reviewed deployment runs migration
 Projection freshness is tracked separately as `summary_received_at` and
 `metadata_received_at`; a newer metadata receipt cannot make an older summary
 appear freshly observed. Combined `received_at` is only the latest server receipt.
+
+### Manual browser import (no companion installation)
+
+`/import` is a deliberate, manual fallback, **not Steam Cloud sync**. The browser
+reads a user-chosen Belmont format 1.1.3 file locally, displays the four supported
+raw scalar fields and limitations, and sends only the validated projection after
+an explicit confirmation. It does not send or store file bytes, names, paths or
+hashes. A file must already be accessible on that device; the site cannot fetch
+private Steam Cloud files. Unsupported formats/games are not interpreted.
+
+`POST /v1/browser/observations` requires the existing secure site session, exact
+Origin and CSRF token, selected Belmont and a current `saves.summary` grant.
+The exact JSON envelope is `{csrf,event_id,appid:4231820,kind:"save_summary",payload}`;
+the same typed safe-summary allowlist as device ingestion and 16 KiB body cap apply.
+No permission, OAuth token or device credential is created by importing.
+
+The latest confirmed import replaces the displayed summary, tagged by the server
+as `browser_manual`; the next accepted device summary replaces it with `device`.
+Each kind retains its own receipt timestamp; neither receipt proves when the game
+was saved. Event retries are idempotent in an owner-bound manual channel, and a
+changed payload with the same event ID is rejected. Existing opt-in site inbox
+rules apply to the two known raw fragment counters only; identical projections do
+not alert. Revocation deletes scoped manual/device data and blocks both sources.

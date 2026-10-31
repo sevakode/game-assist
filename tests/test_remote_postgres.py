@@ -145,3 +145,9 @@ import test_remote_universal as universal_tests
 @unittest.skipUnless(DSN, 'Real local PostgreSQL DSN not supplied')
 class PostgresUniversalGameTests(universal_tests.UniversalGameTests):
     setUp=PostgresServiceTests.setUp
+
+import test_remote_manual as manual_tests
+
+@unittest.skipUnless(DSN, 'Real local PostgreSQL DSN not supplied')
+class PostgresManualImportTests(manual_tests.ManualImportTests):
+    setUp=PostgresServiceTests.setUp

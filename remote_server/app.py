@@ -49,11 +49,15 @@ class SaveMetadataSummary(BaseModel):
     size_bytes: int = Field(strict=True,ge=0,le=1073741824)
     modified_ns: int = Field(strict=True,ge=0,le=2**63-1)
 
+def validated_summary(payload):
+    """One allowlist for manual and device summaries; never raw-save decoding."""
+    return SaveSummary.model_validate(payload).model_dump_json()
+
 def parse_appid(value):
     if not isinstance(value,str) or not re.fullmatch(r'[1-9][0-9]{0,9}',value) or int(value)>2147483647:
         raise HTTPException(422,'Positive Steam AppID up to 2147483647 required')
     return int(value)
-NOTICE = 'Компаньон сообщил об изменении разрешённых счётчиков сохранения. Получение предметов или улучшений не подтверждено.'
+NOTICE = 'Получена сводка с изменением разрешённых счётчиков сохранения. Получение предметов или улучшений не подтверждено.'
 NOTIFICATION_FIELDS = ('healthUpgradeFragmentCount','manaUpgradeFragmentCount')
 INBOX_TTL = 30 * 86400
 INBOX_LIMIT = 50
@@ -180,15 +184,16 @@ class Store:
                 scopes=game['authorized_scopes']
                 if not game['selected'] or not scopes:
                     continue
-                item={'appid':game['appid'],'status':'unknown','summary':None,'metadata':None,'received_at':None,'summary_received_at':None,'metadata_received_at':None,'observation_time':'unknown',
+                item={'appid':game['appid'],'status':'unknown','summary':None,'metadata':None,'received_at':None,'summary_received_at':None,'metadata_received_at':None,'summary_source':None,'metadata_source':None,'observation_time':'unknown',
                       'summary_supported':game['summary_supported'],'cloud_available':False,'achievements_available':False}
                 for kind,scope,model,key in [('save_summary','saves.summary',SaveSummary,'summary'),('save_metadata','saves.metadata',SaveMetadataSummary,'metadata')]:
                     if scope not in scopes or (kind=='save_summary' and game['appid']!=APPID):
                         continue
-                    row=db.execute('SELECT payload,observed FROM observations_v2 WHERE owner=? AND appid=? AND kind=?',(owner,game['appid'],kind)).fetchone()
+                    row=db.execute('SELECT payload,observed,source FROM observations_v2 WHERE owner=? AND appid=? AND kind=?',(owner,game['appid'],kind)).fetchone()
                     if row:
                         item[key]=model.model_validate_json(row['payload']).model_dump(mode='json')
                         item[key+'_received_at']=row['observed']
+                        item[key+'_source']=row['source']
                         item['received_at']=max(item['received_at'] or 0,row['observed'])
                 if item['summary'] is not None:item['status']='reported_not_independently_verified'
                 elif item['metadata'] is not None:item['status']='metadata_only_not_game_progress'
@@ -205,7 +210,7 @@ class Store:
         items = [{'id':row['id'], 'message':NOTICE, 'created_at':row['created'], 'read':row['read_at'] is not None} for row in rows]
         return {'enabled':bool(permitted and settings and settings['enabled']), 'can_enable':permitted,
                 'unread_count':sum(not row['read'] for row in items), 'items':items,
-                'source':'device_companion', 'cloud_available':False, 'push_available':False}
+                'source':'accepted_safe_summary', 'cloud_available':False, 'push_available':False}
 
     @staticmethod
     def record_notification(db, owner, appid, payload, event_key, now):
@@ -293,7 +298,7 @@ class Boundary:
             if message['type'] == 'http.response.start':
                 message['headers'] = [(k,v) for k,v in message['headers'] if k.lower() not in (b'access-control-allow-origin', b'cache-control')]
                 message['headers'] += [(b'cache-control', b'no-store'), (b'referrer-policy', b'no-referrer'),
-                    (b'x-content-type-options', b'nosniff'), (b'content-security-policy', b"default-src 'none'; style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"),
+                    (b'x-content-type-options', b'nosniff'), (b'content-security-policy', (b"default-src 'none'; style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'" + (b"; script-src 'self'; connect-src 'self'" if scope['path']=='/import' else b''))),
                     (b'strict-transport-security', b'max-age=31536000')]
             await send(message)
         return await self.app(scope, replay, secure)
@@ -563,7 +568,7 @@ def create_app(config=None, steam=None, database=None, download_dir=None):
             elif kind=='save_metadata':
                 model,scope=SaveMetadataSummary,'saves.metadata'
             else:raise ValueError()
-            payload=model.model_validate(data['payload']).model_dump_json()
+            payload=validated_summary(data['payload']) if model is SaveSummary else model.model_validate(data['payload']).model_dump_json()
         except (ValueError,TypeError,KeyError,ValidationError):
             raise HTTPException(422,'Only permitted bounded metadata or supported four-field summaries are accepted') from None
         with store.db() as db:
@@ -581,9 +586,52 @@ def create_app(config=None, steam=None, database=None, download_dir=None):
                 if db.execute('SELECT count(*) FROM events WHERE device_hash=?',(key,)).fetchone()[0]>=10000:
                     raise HTTPException(429,'Device event quota reached; re-pair required')
                 db.execute('INSERT INTO events(owner,device_hash,event_id,created,payload_hash,appid,kind) VALUES(?,?,?,?,?,?,?)',(device['owner'],key,data['event_id'],now,digest(payload),appid,kind))
-                db.execute('INSERT INTO observations_v2(owner,appid,kind,payload,observed) VALUES(?,?,?,?,?) ON CONFLICT(owner,appid,kind) DO UPDATE SET payload=excluded.payload,observed=excluded.observed',(device['owner'],appid,kind,payload,now))
+                db.execute("INSERT INTO observations_v2(owner,appid,kind,payload,observed) VALUES(?,?,?,?,?) ON CONFLICT(owner,appid,kind) DO UPDATE SET payload=excluded.payload,observed=excluded.observed,source='device'",(device['owner'],appid,kind,payload,now))
                 if kind=='save_summary':store.record_notification(db,device['owner'],appid,payload,key+':'+data['event_id'],now)
         return JSONResponse({'accepted':True,'duplicate':duplicate})
+
+    async def manual_import_page(request):
+        session=store.session(request,True)
+        permitted=any(game['appid']==APPID and game['selected'] and 'saves.summary' in game['authorized_scopes'] for game in store.catalog(session['owner']))
+        return page('Ручной импорт',ui.manual_import_body(session['csrf'],permitted))
+
+    async def import_script(request):
+        return FileResponse(Path(__file__).parent/'import.js',media_type='text/javascript')
+
+    async def parser_script(request):
+        return FileResponse(Path(__file__).parent/'belmont-parser.js',media_type='text/javascript')
+
+    async def manual_import(request):
+        session=store.session(request,True)
+        if request.headers.get('origin')!=config.issuer:
+            raise HTTPException(403,'Origin required')
+        data=await json_body(request)
+        if not isinstance(data.get('csrf'),str) or not secrets.compare_digest(data['csrf'],session['csrf']):
+            raise HTTPException(403,'Invalid CSRF token')
+        try:
+            if set(data)!={'csrf','event_id','appid','kind','payload'} or type(data['appid']) is not int or data['appid']!=APPID or data['kind']!='save_summary':raise ValueError()
+            if not isinstance(data['event_id'],str) or len(data['event_id'])!=36:raise ValueError()
+            UUID(data['event_id'])
+            payload=validated_summary(data['payload'])
+        except (ValueError,TypeError,KeyError,ValidationError):
+            raise HTTPException(422,'Only the supported Belmont four-field summary is accepted') from None
+        owner=session['owner']
+        # Separate server-bound channel; no device credential or client owner accepted.
+        key='browser:'+digest(owner)
+        store.limit('manual:'+digest(owner),30)
+        with store.db() as db:
+            if not db.execute("SELECT 1 FROM grants WHERE owner=? AND appid=? AND scope='saves.summary'",(owner,APPID)).fetchone() or not db.execute('SELECT 1 FROM game_selections WHERE owner=? AND appid=?',(owner,APPID)).fetchone():
+                raise HTTPException(403,'Current selected game and summary permission required')
+            prior=db.execute('SELECT payload_hash FROM events WHERE device_hash=? AND event_id=?',(key,data['event_id'])).fetchone()
+            if prior and prior['payload_hash']!=digest(payload):raise HTTPException(409,'Event ID already used with different content')
+            if not prior:
+                now=time.time()
+                db.execute('DELETE FROM events WHERE created<?',(now-2678400,))
+                if db.execute('SELECT count(*) FROM events WHERE device_hash=?',(key,)).fetchone()[0]>=10000:raise HTTPException(429,'Manual import event quota reached')
+                db.execute('INSERT INTO events(owner,device_hash,event_id,created,payload_hash,appid,kind) VALUES(?,?,?,?,?,?,?)',(owner,key,data['event_id'],now,digest(payload),APPID,'save_summary'))
+                db.execute("INSERT INTO observations_v2(owner,appid,kind,payload,observed,source) VALUES(?,?,?,?,?,?) ON CONFLICT(owner,appid,kind) DO UPDATE SET payload=excluded.payload,observed=excluded.observed,source=excluded.source",(owner,APPID,'save_summary',payload,now,'browser_manual'))
+                store.record_notification(db,owner,APPID,payload,key+':'+data['event_id'],now)
+        return JSONResponse({'accepted':True,'duplicate':bool(prior),'source':'browser_manual'})
 
     async def consent(request):
         try:
@@ -751,7 +799,7 @@ def create_app(config=None, steam=None, database=None, download_dir=None):
 
     app=mcp.streamable_http_app()
     app.routes.insert(0,Route('/.well-known/oauth-authorization-server',metadata))
-    app.routes.extend([Route('/assets/console.css',stylesheet),Route('/setup',setup_page),Route('/downloads/deck-companion.zip',download),Route('/downloads/deck-companion.zip.sha256',download_checksum),Route('/healthz',health),Route('/',home),Route('/login',login),Route('/steam/callback',callback),
+    app.routes.extend([Route('/import',manual_import_page),Route('/assets/import.js',import_script),Route('/assets/belmont-parser.js',parser_script),Route('/v1/browser/observations',manual_import,methods=['POST']),Route('/assets/console.css',stylesheet),Route('/setup',setup_page),Route('/downloads/deck-companion.zip',download),Route('/downloads/deck-companion.zip.sha256',download_checksum),Route('/healthz',health),Route('/',home),Route('/login',login),Route('/steam/callback',callback),
         Route('/v1/devices/pair/start',pair_start,methods=['POST']),Route('/v1/devices/pair/poll',pair_poll,methods=['POST']),
         Route('/devices/approve',approve_device,methods=['GET','POST']),Route('/v1/device/observations',ingest,methods=['POST']),
         Route('/oauth/consent',consent,methods=['GET','POST']),Route('/account/games/add',add_game,methods=['POST']),Route('/account/games',choose_games,methods=['POST']),Route('/account/games/permissions',game_permission,methods=['POST']),Route('/account/games/revoke',revoke_selected_game,methods=['POST']),Route('/account/notifications',notification_settings,methods=['POST']),Route('/account/notifications/read',notification_read,methods=['POST']),Route('/account/revoke',revoke,methods=['POST']),Route('/logout',logout,methods=['POST'])])
