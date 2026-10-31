@@ -83,3 +83,101 @@ class DatabaseTests(unittest.TestCase):
 
 
 if __name__=='__main__': unittest.main()
+
+
+class ConnectionDiagnosticTests(unittest.TestCase):
+    SECRET = 'SYNTHETIC-PASSWORD-NOT-FOR-LOGS'
+
+    def fake_driver(self, failures):
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+        class DriverError(Exception):
+            pass
+        return SimpleNamespace(Error=DriverError,connect=Mock(side_effect=[DriverError(text) if isinstance(text,str) else text for text in failures]))
+
+    def fake_connection(self):
+        from unittest.mock import Mock
+        raw=Mock()
+        raw.execute.return_value.description=[('server_encoding',)]
+        raw.execute.return_value.fetchone.return_value=('UTF8',)
+        return raw
+
+    def postgres(self):
+        return Database('unused','postgresql://synthetic:'+self.SECRET+'@private-host.example/game?sslmode=verify-full&channel_binding=require')
+
+    def test_only_constant_categories_for_secret_bearing_messages(self):
+        from remote_server.database import connection_failure_category, ConnectionUnavailable
+        cases={'root certificate file not found':'TLS_ROOTS','certificate verify failed':'TLS_VERIFY',
+               'password authentication failed':'AUTH','channel binding required':'CHANNEL_BINDING',
+               'could not translate host name':'DNS','timeout expired':'TIMEOUT',
+               'connection refused':'NETWORK','unexpected failure':'OTHER'}
+        for message,expected in cases.items():
+            self.assertEqual(connection_failure_category(RuntimeError(message+' '+self.SECRET)),expected)
+        self.assertEqual(ConnectionUnavailable(self.SECRET).category,'OTHER')
+        self.assertNotIn(self.SECRET,str(ConnectionUnavailable(self.SECRET)))
+
+    def test_startup_tls_diagnostic_no_secret_no_retry_or_weakening(self):
+        import traceback
+        from unittest.mock import patch
+        from remote_server.database import ConnectionUnavailable
+        driver=self.fake_driver(['root certificate file unavailable '+self.SECRET+' postgresql://private-host.example'])
+        with patch.dict('sys.modules',{'psycopg':driver}),patch('remote_server.database.time.sleep') as sleep:
+            with self.assertLogs('remote_server.database',level='ERROR') as logs:
+                try:
+                    self.postgres().initialize()
+                except ConnectionUnavailable as error:
+                    rendered=''.join(traceback.format_exception(error))
+                    self.assertIsNone(error.__context__)
+                    self.assertIsNone(error.__cause__)
+                else:
+                    self.fail('Expected safe connection failure')
+            self.assertEqual(logs.output,['ERROR:remote_server.database:GA_DB_CONNECT category=TLS_ROOTS attempt=1'])
+            self.assertEqual(driver.connect.call_count,1);sleep.assert_not_called()
+            self.assertEqual(driver.connect.call_args.kwargs['sslmode'],'verify-full')
+            self.assertEqual(driver.connect.call_args.kwargs['sslrootcert'],'system')
+            self.assertEqual(driver.connect.call_args.kwargs['connect_timeout'],5)
+            for secret in (self.SECRET,'private-host.example','postgresql://'):
+                self.assertNotIn(secret,rendered+' '.join(logs.output))
+
+    def test_transient_startup_recovers_without_repeating_initialize(self):
+        from unittest.mock import patch
+        raw=self.fake_connection();driver=self.fake_driver(['timeout expired '+self.SECRET,raw])
+        db=self.postgres()
+        with patch.dict('sys.modules',{'psycopg':driver}),patch('remote_server.database.time.sleep') as sleep:
+            with self.assertLogs('remote_server.database',level='ERROR') as logs: db.initialize()
+            db.initialize()
+            self.assertEqual(driver.connect.call_count,2);sleep.assert_called_once_with(1)
+            self.assertIn('category=TIMEOUT attempt=1',logs.output[0])
+            raw.commit.assert_called_once();raw.close.assert_called_once()
+
+    def test_transient_startup_retries_are_bounded(self):
+        from unittest.mock import patch,call
+        from remote_server.database import ConnectionUnavailable
+        for text in ('could not translate host name','timeout expired','connection refused'):
+            driver=self.fake_driver([text+' '+self.SECRET]*3)
+            with patch.dict('sys.modules',{'psycopg':driver}),patch('remote_server.database.time.sleep') as sleep:
+                with self.assertLogs('remote_server.database',level='ERROR') as logs,self.assertRaises(ConnectionUnavailable):
+                    self.postgres().initialize()
+                self.assertEqual(driver.connect.call_count,3)
+                self.assertEqual(sleep.call_args_list,[call(1),call(2)])
+                self.assertEqual(len(logs.output),3)
+                self.assertNotIn(self.SECRET,' '.join(logs.output))
+
+    def test_auth_channel_binding_unknown_fail_without_retries(self):
+        from unittest.mock import patch
+        from remote_server.database import ConnectionUnavailable
+        for text in ('password authentication failed','channel binding required','unrecognized failure','certificate verify failed'):
+            driver=self.fake_driver([text+' '+self.SECRET])
+            with patch.dict('sys.modules',{'psycopg':driver}),patch('remote_server.database.time.sleep') as sleep:
+                with self.assertLogs('remote_server.database',level='ERROR'),self.assertRaises(ConnectionUnavailable):
+                    self.postgres().initialize()
+                self.assertEqual(driver.connect.call_count,1);sleep.assert_not_called()
+
+    def test_normal_transaction_does_not_retry(self):
+        from unittest.mock import patch
+        from remote_server.database import ConnectionUnavailable
+        driver=self.fake_driver(['timeout expired '+self.SECRET])
+        with patch.dict('sys.modules',{'psycopg':driver}),patch('remote_server.database.time.sleep') as sleep:
+            with self.assertRaises(ConnectionUnavailable):
+                with self.postgres().transaction(): pass
+            self.assertEqual(driver.connect.call_count,1);sleep.assert_not_called()

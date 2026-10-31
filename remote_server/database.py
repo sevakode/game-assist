@@ -6,6 +6,9 @@ preserves the prototype's SQLite BEGIN IMMEDIATE serialization across processes
 and transaction-pooled connections. It intentionally limits throughput.
 """
 import os
+import logging
+import re
+import time
 from pathlib import Path
 import sqlite3
 import threading
@@ -17,6 +20,40 @@ from .schema import SCHEMA
 # connections close at transaction exit; no session locks survive pool handoff.
 _CONNECTION_SLOTS = threading.BoundedSemaphore(8)
 _ADVISORY_LOCK_ID = 0x47414D4541535354
+
+
+_LOG = logging.getLogger(__name__)
+_FAILURE_CATEGORIES = frozenset({'TLS_ROOTS', 'TLS_VERIFY', 'AUTH', 'CHANNEL_BINDING', 'DNS', 'TIMEOUT', 'NETWORK', 'OTHER'})
+_TRANSIENT_CATEGORIES = frozenset({'DNS', 'TIMEOUT', 'NETWORK'})
+
+
+class ConnectionUnavailable(RuntimeError):
+    """Only constant classification survives; raw driver exception is not retained."""
+    def __init__(self, category):
+        self.category = category if category in _FAILURE_CATEGORIES else 'OTHER'
+        super().__init__('PostgreSQL connection unavailable')
+
+
+def connection_failure_category(error):
+    """Best-effort local inspection. NEVER emit exception text or connection data."""
+    message = str(error).lower()[:16384]
+    state = getattr(error, 'sqlstate', None)
+    state = state if isinstance(state, str) and re.fullmatch(r'[0-9A-Z]{5}', state) else ''
+    if any(term in message for term in ('channel binding', 'channel_binding')):
+        return 'CHANNEL_BINDING'
+    if any(term in message for term in ('root certificate file', 'sslrootcert', 'load root certificate', 'system root certificates', 'default certificate paths', 'no certificate or crl found')):
+        return 'TLS_ROOTS'
+    if any(term in message for term in ('certificate verify failed', 'certificate verification failed', 'does not match host name', 'hostname mismatch', 'ssl error', 'tls error', 'certificate has expired', 'self-signed certificate')):
+        return 'TLS_VERIFY'
+    if state.startswith('28') or any(term in message for term in ('password authentication failed', 'authentication failed', 'no pg_hba.conf entry', 'no password supplied', 'invalid password')):
+        return 'AUTH'
+    if any(term in message for term in ('could not translate host name', 'name or service not known', 'temporary failure in name resolution', 'nodename nor servname', 'getaddrinfo failed')):
+        return 'DNS'
+    if isinstance(error, TimeoutError) or any(term in message for term in ('timeout expired', 'connection timed out', 'connect timeout', 'connection timeout')):
+        return 'TIMEOUT'
+    if state.startswith('08') or any(term in message for term in ('connection refused', 'network is unreachable', 'no route to host', 'connection reset', 'server closed the connection unexpectedly')):
+        return 'NETWORK'
+    return 'OTHER'
 
 
 class Row(dict):
@@ -124,10 +161,15 @@ class Transaction:
                     kwargs['sslmode'] = 'verify-full'
                     if 'sslrootcert' not in self.database.options:
                         kwargs['sslrootcert'] = 'system'
+                failure_category = None
                 try:
                     self.raw = psycopg.connect(self.database.database_url, **kwargs)
-                except psycopg.Error:
-                    raise RuntimeError('PostgreSQL connection unavailable') from None
+                except psycopg.Error as error:
+                    failure_category = connection_failure_category(error)
+                # Raise after leaving the driver exception handler: even the
+                # suppressed __context__ must not retain credential-bearing text.
+                if failure_category is not None:
+                    raise ConnectionUnavailable(failure_category) from None
                 # Transaction-local settings work with transaction poolers; startup
                 # options and session state must not be required for correctness.
                 self.raw.execute('SET LOCAL statement_timeout = 10000')
@@ -167,6 +209,8 @@ class Database:
         self.allow_insecure_test = allow_insecure_test
         self.backend = 'postgres' if database_url is not None else 'sqlite'
         self.options = {}
+        self._initialized = False
+        self._initialization_lock = threading.Lock()
         if database_url is not None:
             try:
                 parsed = urlsplit(database_url)
@@ -191,15 +235,31 @@ class Database:
         return Transaction(self)
 
     def initialize(self):
-        if self.backend == 'sqlite':
-            target = Path(self.path)
-            target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-            descriptor = os.open(target, os.O_CREAT | os.O_RDWR | getattr(os, 'O_NOFOLLOW', 0), 0o600)
-            try:
-                os.fchmod(descriptor, 0o600)
-            finally:
-                os.close(descriptor)
-        with self.transaction() as connection:
-            if self.backend == 'postgres' and connection.execute('SHOW server_encoding').fetchone()[0] != 'UTF8':
-                raise ValueError('PostgreSQL database must use UTF8 encoding')
-            connection.executescript(SCHEMA[self.backend])
+        # Only startup/schema initialization retries. Ordinary request connections
+        # retain a five-second timeout and a single attempt; TLS/auth never retry.
+        with self._initialization_lock:
+            if self._initialized:
+                return
+            if self.backend == 'sqlite':
+                target = Path(self.path)
+                target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+                descriptor = os.open(target, os.O_CREAT | os.O_RDWR | getattr(os, 'O_NOFOLLOW', 0), 0o600)
+                try:
+                    os.fchmod(descriptor, 0o600)
+                finally:
+                    os.close(descriptor)
+            for attempt in range(1, 4):
+                try:
+                    with self.transaction() as connection:
+                        if self.backend == 'postgres' and connection.execute('SHOW server_encoding').fetchone()[0] != 'UTF8':
+                            raise ValueError('PostgreSQL database must use UTF8 encoding')
+                        connection.executescript(SCHEMA[self.backend])
+                    self._initialized = True
+                    return
+                except ConnectionUnavailable as error:
+                    # Fixed vocabulary + bounded integer only. No exc_info,
+                    # SQLSTATE, repr(error), DSN, hostname, user or driver args.
+                    _LOG.error('GA_DB_CONNECT category=%s attempt=%d', error.category, attempt)
+                    if error.category not in _TRANSIENT_CATEGORIES or attempt == 3:
+                        raise
+                    time.sleep(attempt)
