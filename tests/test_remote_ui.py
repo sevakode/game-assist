@@ -28,7 +28,7 @@ class ConsoleUITests(unittest.TestCase):
         self.assertEqual(elements.find('script'), [])
         self.assertNotIn('<unsafe>', source)
         self.assertTrue(elements.find('a', href='/login'))
-        self.assertIn('Steam Cloud недоступно', source)
+        self.assertIn('Steam Cloud недоступен', source)
 
     def test_empty_home_does_not_offer_unavailable_toggle_or_fake_progress(self):
         source = ui.home_body({'games': []}, 'token')
@@ -99,6 +99,29 @@ class ConsoleUITests(unittest.TestCase):
         self.assertIn('мобильном ChatGPT здесь не проверена', source)
         self.assertIn('Settings → Connectors', source)
         self.assertFalse(elements.find('script'))
+
+    def test_console_layout_has_real_controls_and_no_marketing_shell(self):
+        source = ui.landing_body()
+        elements = Elements(source)
+        self.assertTrue(elements.find('aside', id='library'))
+        self.assertTrue(elements.find('header', id='selected-game'))
+        self.assertTrue(elements.find('section', id='context'))
+        self.assertIn('Каталог поддержки, не библиотека твоего Steam', source)
+        self.assertNotIn('class="hero"', source)
+        self.assertNotIn('eyebrow', source)
+        self.assertNotIn('Продолжим', source)
+        self.assertNotIn('<em>', source)
+        self.assertEqual(source.count('Steam Cloud'), 1)
+        self.assertFalse(elements.find('progress'))
+        self.assertTrue(elements.find('a', href='/devices/approve'))
+        self.assertTrue(elements.find('a', href='/setup'))
+
+    def test_revoke_requires_expanding_explicit_consequence(self):
+        source = ui.home_body({'games': []}, 'token')
+        elements = Elements(source)
+        self.assertTrue(elements.find('details', **{'class':'revoke-confirm'}))
+        self.assertIn('удалит сводки с сервера', source)
+        self.assertTrue(elements.find('form', method='post', action='/account/revoke'))
 
     def test_unknown_timestamp_and_scalar_are_safe(self):
         for value in [None, '<script>', float('inf')]:
