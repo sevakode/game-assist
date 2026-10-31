@@ -267,3 +267,133 @@ class ConsoleUITests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class ConsoleRedesignTests(unittest.TestCase):
+    def test_selection_rows_have_real_associated_checkboxes(self):
+        source=ui.library('none',catalog=ui.game_catalog(),csrf='token')
+        parsed=Elements(source)
+        for appid in ui.GAMES:
+            self.assertTrue(parsed.find('label', **{'for':f'choose-{appid}'}))
+            self.assertTrue(parsed.find('input',id=f'choose-{appid}',name=f'game_{appid}'))
+        self.assertFalse(parsed.find('a', **{'class':'game-open'}))
+        self.assertTrue(parsed.find('details', **{'class':'manage-games','open':None}))
+
+    def test_new_account_has_no_default_game_progress(self):
+        source=ui.home_body({'games':[]},'csrf',capabilities={'catalog':[]})
+        parsed=Elements(source)
+        self.assertIn('Выбери первую игру',source)
+        self.assertFalse(parsed.find('header',id='selected-game'))
+        self.assertFalse(parsed.find('a',href='/devices/approve'))
+        self.assertFalse(parsed.find('a',href='/import'))
+        self.assertTrue(parsed.find('form',action='/account/games'))
+        self.assertTrue(parsed.find('form',action='/logout'))
+
+    def test_empty_device_selection_cannot_submit(self):
+        parsed=Elements(ui.device_body('csrf',[]))
+        self.assertTrue(any('disabled' in a for a in parsed.find('button')))
+        self.assertTrue(parsed.find('a',href='/#library'))
+        selected=Elements(ui.device_body('csrf',[{'appid':4231820,'selected':True}]))
+        self.assertFalse(any('disabled' in a for a in selected.find('button')))
+
+    def test_capability_panel_never_claims_coverage_or_personal_progress(self):
+        for appid in (4231820,1245620,570):
+            source=ui.capabilities_panel(appid)
+            self.assertNotIn('100%',source)
+            self.assertFalse(Elements(source).find('progress'))
+            self.assertIn('не подтверждение полученных данных',source)
+            self.assertIn('Не определяются',source)
+        self.assertIn('Сырые значения',ui.capabilities_panel(4231820))
+        self.assertNotIn('Доступны в сводке',ui.capabilities_panel(570))
+
+    def test_discovery_does_not_add_grants_or_select_automatically(self):
+        games=[{'appid':570,'name':'Dota <unsafe>'},{'appid':4231820,'name':ui.GAME}]
+        source=ui.discovery_panel(games,{4231820},'csrf')
+        parsed=Elements(source)
+        self.assertEqual(len(parsed.find('form',action='/account/games/add')),1)
+        self.assertTrue(parsed.find('input',name='appid',value='570'))
+        self.assertFalse(parsed.find('input',name='scope'))
+        self.assertFalse(parsed.find('input',type='checkbox'))
+        self.assertIn('Dota &lt;unsafe&gt;',source)
+        self.assertIn('Пока без декодера',source)
+        public=Elements(ui.discovery_panel(games,set()))
+        self.assertFalse(public.find('form'))
+        self.assertTrue(public.find('a',href='/?game=570#selected-game'))
+
+    def test_public_curated_focus_and_local_original_art(self):
+        source=ui.landing_body(570,[{'appid':570,'name':'Dota 2'}])
+        self.assertIn('<h2>Dota 2</h2>',source)
+        self.assertIn('Декодер этой игры пока недоступен',source)
+        parsed=Elements(source)
+        self.assertTrue(parsed.find('svg'))
+        self.assertFalse(parsed.find('img'))
+        self.assertFalse(parsed.find('script'))
+        self.assertIn('content="dark"',ui.page('x',source).body.decode())
+
+    def test_provider_title_is_not_mislabeled_as_user_supplied(self):
+        source=ui.library('none',catalog=[{'appid':570,'title':'Dota 2','selected':True,'user_label_unverified':False}],csrf='x')
+        self.assertNotIn('Название задано пользователем',source)
+        source=ui.library('none',catalog=[{'appid':570,'title':'Mine','selected':True,'user_label_unverified':True}],csrf='x')
+        self.assertIn('Название задано пользователем',source)
+
+    def test_owned_library_has_explicit_consent_no_automatic_selection(self):
+        self.assertEqual(ui.owned_library_panel('x',None),'')
+        disabled=ui.owned_library_panel('x',{'configured':False,'enabled':False})
+        self.assertFalse(Elements(disabled).find('form'))
+        off=ui.owned_library_panel('x',{'configured':True,'enabled':False})
+        self.assertTrue(Elements(off).find('input',name='enabled',value='yes'))
+        self.assertFalse(Elements(off).find('form',action='/account/library/refresh'))
+        source=ui.owned_library_panel('x',{'configured':True,'enabled':True,'status':'ok','games':[{'appid':570,'name':'<unsafe>'},{'appid':4231820,'name':'Belmont'}]},[4231820])
+        parsed=Elements(source)
+        self.assertTrue(parsed.find('form',action='/account/library/refresh'))
+        self.assertEqual(len(parsed.find('form',action='/account/games/add')),1)
+        self.assertIn('&lt;unsafe&gt;',source)
+        self.assertFalse(parsed.find('input',name='scope'))
+        self.assertFalse(parsed.find('input',type='checkbox'))
+        self.assertTrue(parsed.find('input',name='enabled',value='no'))
+
+    def test_owned_library_unavailable_or_disabled_hides_stale_names(self):
+        for configured,enabled,status in [(False,True,'ok'),(True,False,'ok'),(True,True,'unavailable'),(True,True,'expired')]:
+            source=ui.owned_library_panel('x',{'configured':configured,'enabled':enabled,'status':status,'games':[{'appid':570,'name':'STALE'}]})
+            self.assertNotIn('STALE',source)
+        self.assertIn('не означает',ui.owned_library_panel('x',{'configured':True,'enabled':True,'status':'unavailable'}))
+
+
+class FirstVisitTests(unittest.TestCase):
+    def test_guest_sees_purpose_and_real_start_before_game_settings(self):
+        source=ui.landing_body()
+        parsed=Elements(source)
+        self.assertIn('Игровая сводка для твоего AI-помощника',source)
+        self.assertTrue(parsed.find('a',href='/login'))
+        self.assertTrue(parsed.find('a',href='#library'))
+        self.assertLess(source.index('id="welcome-title"'),source.index('id="library"'))
+        self.assertEqual(source.count('class="start-steps"'),1)
+        self.assertIn('Войди через Steam',source)
+        self.assertIn('Выбери игру и разрешения',source)
+        self.assertIn('Импортируй сводку, затем подключи AI',source)
+        self.assertIn('не даёт доступ к облачным сейвам',source)
+        self.assertIn('Пример запроса после импорта Belmont и подключения AI',source)
+        self.assertIn('На этом сайте нет чата',source)
+        self.assertLess(source.index('class="welcome-prerequisites"'),source.index('Начать со Steam'))
+        self.assertIn('формата 1.1.3',source)
+        self.assertIn('для просмотра сайта он не требуется',source)
+        self.assertIn('Для других игр декодеров пока нет',source)
+        self.assertIn('Облачные сейвы не подключены',source)
+        self.assertFalse(parsed.find('textarea'))
+        self.assertFalse(parsed.find('input',placeholder='Сообщение'))
+
+    def test_first_visit_states_real_limitations_not_fake_coverage(self):
+        source=ui.welcome_panel()
+        self.assertIn('Файл разбирается в браузере без установки на Deck',source)
+        self.assertIn('Компаньон для Deck необязателен',source)
+        self.assertIn('Автоматическое получение облачных сейвов не работает',source)
+        self.assertIn('Помощник подключается отдельно',source)
+        self.assertIn('нет готовой полной базы прохождений',source)
+        self.assertNotIn('100%',source)
+        self.assertNotIn('автоматически получит все',source)
+
+    def test_signed_in_users_are_not_repeatedly_sent_to_login_onboarding(self):
+        source=ui.home_body({'games':[]},'csrf',capabilities={'catalog':[]})
+        self.assertNotIn('id="welcome-title"',source)
+        library=ui.owned_library_panel('csrf',{'configured':False,'enabled':False})
+        self.assertTrue(Elements(library).find('details',id='steam-library'))

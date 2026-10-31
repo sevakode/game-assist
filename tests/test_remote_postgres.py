@@ -22,7 +22,7 @@ import test_remote_oauth as oauth_tests
 import test_remote_service as service_tests
 
 DSN=os.environ.get('GA_TEST_POSTGRES_URL')
-TABLES='schema_migrations,game_registrations,observations_v2,game_selections,notification_settings,notifications,users,sessions,login_states,grants,pairings,devices,observations,events,limits,steam_nonces,oauth_clients,oauth_pending,oauth_codes,oauth_tokens'
+TABLES='library_cache,achievement_cache,schema_migrations,game_registrations,observations_v2,game_selections,notification_settings,notifications,users,sessions,login_states,grants,pairings,devices,observations,events,limits,steam_nonces,oauth_clients,oauth_pending,oauth_codes,oauth_tokens'
 
 
 def database():
@@ -151,3 +151,26 @@ import test_remote_manual as manual_tests
 @unittest.skipUnless(DSN, 'Real local PostgreSQL DSN not supplied')
 class PostgresManualImportTests(manual_tests.ManualImportTests):
     setUp=PostgresServiceTests.setUp
+
+import test_remote_achievements as achievement_tests
+from unittest.mock import patch
+
+@unittest.skipUnless(DSN, 'Real local PostgreSQL DSN not supplied')
+class PostgresAchievementTests(achievement_tests.AchievementTests):
+    def setUp(self):
+        self.reader=achievement_tests.FakeReader()
+        with patch('remote_server.app.AchievementReader',return_value=self.reader):PostgresServiceTests.setUp(self)
+
+import test_remote_discovery as discovery_tests
+
+@unittest.skipUnless(DSN, 'Real local PostgreSQL DSN not supplied')
+class PostgresDiscoveryTests(discovery_tests.DiscoveryTests):
+    setUp=PostgresServiceTests.setUp
+
+import test_remote_library as library_tests
+
+@unittest.skipUnless(DSN, 'Real local PostgreSQL DSN not supplied')
+class PostgresLibraryTests(library_tests.LibraryTests):
+    def setUp(self):
+        self.reader=library_tests.FakeLibrary()
+        with patch('remote_server.app.LibraryReader',return_value=self.reader):PostgresServiceTests.setUp(self)

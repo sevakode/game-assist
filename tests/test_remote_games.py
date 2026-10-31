@@ -68,7 +68,7 @@ class GameSelectionTests(unittest.TestCase):
             self.assertEqual(catalog[appid]['source_status'],'metadata_only_parser_unavailable')
             self.assertEqual(self.permission(appid).status_code,422)
         for scope in ('achievements.read','read_cloud'):
-            self.assertEqual(self.permission(scope=scope).status_code,422)
+            self.assertEqual(self.permission(scope=scope).status_code,503 if scope=='achievements.read' else 422)
         self.assertTrue(all(not g['cloud_available'] and not g['achievements_available'] for g in catalog.values()))
         self.assertEqual(self.permission(enabled='no').status_code,303)
         self.assertEqual(self.selected(),set(CURRENT_GAME_IDS))

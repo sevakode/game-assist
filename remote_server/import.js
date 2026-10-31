@@ -29,7 +29,7 @@
         if(response.status===401||response.status===403){update({phase:'blocked',payload:null,eventId:null,message:'Сеанс или разрешение недействительны. Вернись к игре, проверь доступ и выбери файл заново.'});return;}
         if(response.ok&&response.accepted===true)update({phase:'success',payload:null,eventId:null,message:'Сводка сохранена как ручной импорт. Это не автоматическая синхронизация.'});
         else if([400,409,413,422].includes(response.status))update({phase:'error',payload:null,eventId:null,message:'Сервер отклонил сводку. Проверь разрешение и выбери файл заново.'});
-        else update({phase:'retry',message:'Не удалось подтвердить получение. Повторная отправка этой же сводки безопасна; файл заново не передаётся.'});
+        else update({phase:'retry',message:'Не удалось подтвердить получение. Можно повторить отправку этой же сводки. Передаются только четыре значения и сведения о формате, не файл.'});
       }catch(_){if(epoch===generation)update({phase:'retry',message:'Связь прервалась. Можно повторить отправку той же сводки без создания дубликата.'});}
     }
     update(state); return {select,clear,submit,getState:()=>({...state})};

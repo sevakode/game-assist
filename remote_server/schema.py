@@ -1,5 +1,7 @@
 """Version-one durable schema. PostgreSQL epoch timestamps are float64, not REAL."""
 SQLITE_SCHEMA = '''
+CREATE TABLE IF NOT EXISTS library_cache(owner TEXT PRIMARY KEY,consent_id TEXT NOT NULL,refresh_nonce TEXT,payload TEXT,status TEXT NOT NULL DEFAULT 'not_requested',attempted_at REAL,received_at REAL,expires REAL);
+CREATE TABLE IF NOT EXISTS achievement_cache(owner TEXT NOT NULL,appid INTEGER NOT NULL,consent_id TEXT NOT NULL,refresh_nonce TEXT,payload TEXT,status TEXT NOT NULL DEFAULT 'not_requested',attempted_at REAL,received_at REAL,expires REAL,PRIMARY KEY(owner,appid));
 CREATE TABLE IF NOT EXISTS users(id TEXT PRIMARY KEY, steamid TEXT NOT NULL UNIQUE);
 CREATE TABLE IF NOT EXISTS sessions(hash TEXT PRIMARY KEY, owner TEXT, csrf TEXT NOT NULL, expires REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS login_states(hash TEXT PRIMARY KEY, session_hash TEXT NOT NULL, return_to TEXT NOT NULL, expires REAL NOT NULL, next_path TEXT NOT NULL);

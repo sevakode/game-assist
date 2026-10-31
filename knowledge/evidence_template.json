@@ -1,0 +1,17 @@
+{
+  "schema_version": "1.0",
+  "protocol": "controlled-save-observation-v1",
+  "appid": 4231820,
+  "game_version": null,
+  "save_format_version": null,
+  "platform": "unknown",
+  "parser_revision": null,
+  "target": "unknown",
+  "status": "hypothesis",
+  "verification_scope": "structural_observations_only",
+  "independent_review_completed": false,
+  "review_attestation": null,
+  "consented_local_comparison": false,
+  "redaction_review_completed": false,
+  "trials": []
+}

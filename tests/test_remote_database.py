@@ -19,7 +19,7 @@ class DatabaseTests(unittest.TestCase):
             self.assertEqual(path.parent.stat().st_mode & 0o777, 0o700)
             with db.transaction() as connection:
                 count=connection.execute("SELECT count(*) FROM sqlite_master WHERE type='table'").fetchone()
-                self.assertEqual(count[0],20)
+                self.assertEqual(count[0],22)
                 connection.execute('INSERT INTO users VALUES(?,?)',('user','76561198000000000'))
                 row=connection.execute('SELECT id,steamid FROM users').fetchone()
                 self.assertEqual(row[0],row['id'])

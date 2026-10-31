@@ -35,23 +35,89 @@ def hidden(name, value):
 
 
 def page(title, body):
-    return HTMLResponse(f'''<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><title>{esc(title)} · Game Assist</title><link rel="stylesheet" href="/assets/console.css"></head><body><a class="skip" href="#main">К содержимому</a><div class="shell"><header class="topbar"><a class="brand" href="/" aria-label="Game Assist — главная"><span class="brand-icon" aria-hidden="true"><i></i><i></i></span>Game Assist</a><span class="system-status">Только чтение</span></header><main id="main">{body}</main><footer>Сохранения не изменяются. Подсказки — без спойлеров.</footer></div><nav class="system-nav" aria-label="Основная навигация"><a href="/#library"><span class="nav-icon library-icon" aria-hidden="true"></span>Игры</a><a href="/#assistant"><span class="nav-icon assistant-icon" aria-hidden="true"></span>Помощник</a><a href="/setup"><span class="nav-icon device-icon" aria-hidden="true"></span>Устройство</a></nav></body></html>''')
+    return HTMLResponse(f'''<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="dark"><title>{esc(title)} · Game Assist</title><link rel="stylesheet" href="/assets/console.css"></head><body><a class="skip" href="#main">К содержимому</a><div class="shell"><header class="topbar"><a class="brand" href="/" aria-label="Game Assist — главная"><span class="brand-icon" aria-hidden="true"><i></i><i></i></span>Game Assist</a><span class="system-status">Только чтение</span></header><main id="main">{body}</main><footer>Сохранения не изменяются. Подсказки — без спойлеров.</footer></div><nav class="system-nav" aria-label="Основная навигация"><a href="/#library"><span class="nav-icon library-icon" aria-hidden="true"></span>Игры</a><a href="/#assistant"><span class="nav-icon assistant-icon" aria-hidden="true"></span>Помощник</a><a href="/setup"><span class="nav-icon device-icon" aria-hidden="true"></span>Устройство</a></nav></body></html>''')
 
 
-def game_tile(status='Сводки пока нет', appid=4231820, active=True):
-    title = GAMES[appid]
-    cover_title = {4231820:'Belmont’s<br>Curse', 1245620:'Elden<br>Ring', 292030:'The<br>Witcher 3'}[appid]
-    return f'<a class="game-tile {"selected" if active else ""}" href="/?game={appid}#selected-game" aria-label="Открыть {esc(title)}" {"aria-current=page" if active else ""}><span class="game-cover cover-{appid}" aria-hidden="true"><strong>{cover_title}</strong></span><span class="game-tile-copy"><strong>{esc(title)}</strong><small>{esc(status)}</small></span></a>'
+def cover_art(appid):
+    """Original decorative vector art, no remote images or game-state information."""
+    if appid == 4231820:
+        art = '<circle cx="137" cy="57" r="39" class="art-orbit"/><path d="M0 155L39 134 68 145 102 115 151 136 200 111V240H0Z" class="art-land"/><path d="M39 190V114H51V89L60 62 69 89V114H81V154H99V97H107V72L116 39 125 72V97H137V131H153V107L161 85 169 107V190Z" class="art-silhouette"/><path d="M111 190V162Q116 152 121 162V190M57 129V141M113 111V124M158 145V156" class="art-detail"/>'
+    elif appid == 1245620:
+        art = '<circle cx="100" cy="100" r="51" class="art-ring"/><circle cx="100" cy="70" r="33" class="art-ring"/><circle cx="100" cy="131" r="33" class="art-ring"/><path d="M100 24V180M73 42L100 17 127 42M81 176L100 198 119 176" class="art-ring"/><path d="M0 214L42 184 71 202 110 176 151 196 200 175V240H0Z" class="art-land"/>'
+    elif appid == 292030:
+        art = '<circle cx="100" cy="105" r="73" class="art-orbit"/><path d="M37 48L80 69 100 61 121 69 164 48 150 119 125 154 100 188 75 154 50 119Z" class="art-silhouette"/><path d="M54 80L81 92 73 112 57 100M146 80L119 92 127 112 143 100M75 126L100 146 125 126M100 146V177M82 148L100 158 118 148" class="art-detail"/>'
+    else:
+        art = '<circle cx="100" cy="105" r="62" class="art-orbit"/><path d="M63 77H137Q150 77 155 94L167 140Q171 158 156 157L127 136H73L44 157Q29 158 33 140L45 94Q50 77 63 77Z" class="art-silhouette"/><path d="M57 104H83M70 91V117M127 100H131M139 111H143" class="art-detail"/>'
+    return f'<svg viewBox="0 0 200 240" aria-hidden="true" focusable="false">{art}</svg>'
+
+
+def game_tile(status='Сводки пока нет', appid=4231820, active=True, title=None):
+    title = title or GAMES.get(appid, f'Steam AppID {appid}')
+    return f'<a class="game-tile {"selected" if active else ""}" href="/?game={appid}#selected-game" aria-label="Открыть {esc(title)}" {"aria-current=page" if active else ""}><span class="game-cover cover-{appid}" aria-hidden="true">{cover_art(appid)}</span><span class="game-tile-copy"><strong>{esc(title)}</strong><small>{esc(status)}</small></span></a>'
+
+
+def discovery_panel(catalog, registered, csrf=None):
+    if not catalog:
+        return ''
+    cards = []
+    for game in catalog:
+        appid = game.get('appid')
+        if type(appid) is not int or appid <= 0:
+            continue
+        title = game.get('name') or f'Steam AppID {appid}'
+        if csrf is None:
+            action = f'<a class="plain-link" href="/?game={appid}#selected-game">Посмотреть поддержку</a>'
+        elif appid in registered:
+            action = '<a class="plain-link" href="#library">Уже в твоём списке</a>'
+        else:
+            action = f'<form method="post" action="/account/games/add">{hidden("csrf",csrf)}{hidden("appid",appid)}{hidden("label","")}<button class="secondary">Добавить в список</button></form>'
+        cards.append(f'<article class="discover-game"><span class="discovery-art cover-{appid}" aria-hidden="true">{cover_art(appid)}</span><div><h3>{esc(title)}</h3><p>AppID {appid}</p><span class="support-label">{"Сводка из 4 полей" if appid==4231820 else "Пока без декодера"}</span>{action}</div></article>')
+    return '<details class="discovery"><summary>Каталог игр <span>Найти и добавить</span></summary><p class="small-text">Добавление не включает чтение данных. Поддержка сохранений указана отдельно; это не список принадлежащих тебе игр.</p><div class="discovery-grid">'+''.join(cards)+'</div></details>'
+
+
+def owned_library_panel(csrf, library, registered=()):
+    if not isinstance(library, dict):
+        return ''
+    configured, enabled = bool(library.get('configured')), bool(library.get('enabled'))
+    controls = []
+    if configured or enabled:
+        controls.append(f'<form method="post" action="/account/library/permission">{hidden("csrf",csrf)}{hidden("enabled","no" if enabled else "yes")}<button class="secondary">{"Отключить чтение библиотеки" if enabled else "Разрешить чтение библиотеки"}</button></form>')
+    if configured and enabled:
+        controls.append(f'<form method="post" action="/account/library/refresh">{hidden("csrf",csrf)}<button class="secondary">Обновить список из Steam</button></form>')
+    if not configured:
+        content = '<p>Импорт библиотеки пока не настроен оператором сервиса. API-ключ от тебя не нужен. Игры можно добавить по AppID или из каталога.</p>'
+    elif not enabled:
+        content = '<p>Разреши получение списка доступных игр твоего Steam. Это не даёт доступ к сохранениям и не включает игры автоматически.</p>'
+    elif library.get('status') == 'ok':
+        rows = []
+        for game in library.get('games') or []:
+            appid = game.get('appid')
+            if type(appid) is not int or appid <= 0:
+                continue
+            title = game.get('name') or f'Steam AppID {appid}'
+            action = ('<span class="small-text">Уже добавлена</span>' if appid in registered else f'<form method="post" action="/account/games/add">{hidden("csrf",csrf)}{hidden("appid",appid)}{hidden("label",title)}<button class="secondary">Добавить</button></form>')
+            rows.append(f'<li><div><strong>{esc(title)}</strong><small>Steam AppID {appid}</small></div>{action}</li>')
+        content = ('<ul class="owned-games">'+''.join(rows)+'</ul>' if rows else '<p>Steam вернул пустой доступный список. Это не доказывает отсутствие игр в аккаунте.</p>')
+        content += f'<p class="small-text">Получено: {esc(timestamp(library.get("received_at")))}</p>'
+    elif library.get('status') == 'expired':
+        content = '<p>Список устарел. Обнови его из Steam; старые названия сейчас не показываются.</p>'
+    elif library.get('status') == 'unavailable':
+        content = '<p>Список недоступен. Возможно, Steam ограничивает доступ. Это не означает, что у тебя нет игр.</p>'
+    else:
+        content = '<p>Разрешение включено. Нажми «Обновить список из Steam», чтобы запросить игры.</p>'
+    return f'<details class="owned-library" id="steam-library"><summary>Моя библиотека Steam <span>{"Чтение включено" if enabled else "Не подключена"}</span></summary>{content}<div class="action-row">{"".join(controls)}</div><p class="small-text">Добавленные игры выбираются и получают разрешения отдельно. Список не раскрывает достижения, сейвы или время игры.</p></details>'
 
 
 def library(status, active=4231820, catalog=None, csrf=None):
     catalog = catalog or game_catalog()
     if csrf is None:
-        content = '<div class="catalog-tiles">' + ''.join(game_tile('Декодер сводки доступен' if g['appid']==4231820 else 'Декодер недоступен', g['appid'], g['appid']==active) for g in catalog) + '</div><a class="plain-link" href="/login">Войти, чтобы выбрать игры и доступ</a>'
+        content = '<div class="catalog-tiles">' + ''.join(game_tile('4 поля сейва' if g['appid']==4231820 else 'Декодер недоступен', g['appid'], g['appid']==active, g['title']) for g in catalog) + '</div><a class="plain-link" href="/login">Войти, чтобы выбрать игры и доступ</a>'
     else:
-        choices = ''.join(f'<div class="game-choice {"focused" if g["appid"]==active else ""}"><label><input type="checkbox" name="game_{g["appid"]}" value="yes" {"checked" if g.get("selected") else ""}><span>{esc(g["title"])}<small>{"Название задано пользователем; не проверено. " if g["appid"] not in GAMES else ""}AppID {g["appid"]}</small><small>{"Выбрана" if g.get("selected") else "Не выбрана"} / {"Есть разрешения" if g.get("scopes") else "Нет разрешений"}</small></span></label><a class="game-open" href="{("/?game=" + str(g["appid"]) + "#selected-game") if g.get("selected") else "#library"}" aria-label="{("Открыть " if g.get("selected") else "Выбрать ") + esc(g["title"])}">{"Открыть" if g.get("selected") else "Выбрать"}</a></div>' for g in catalog)
-        content = f'<form method="post" action="/account/games" class="game-chooser">{hidden("csrf",csrf)}<fieldset><legend>Выбери одну или несколько</legend>{choices}</fieldset><div class="chooser-actions"><button class="primary" name="action" value="review">Проверить выбор</button><button class="secondary" name="action" value="review_all">Выбрать все текущие ({len(catalog)})</button></div></form><p class="small-text">Выбор сохраняется после проверки. Разрешения на данные задаются отдельно для каждой игры.</p>'
-    add_form = (f'<section class="add-game"><h2>Добавить игру</h2><form method="post" action="/account/games/add">{hidden("csrf",csrf)}<label for="new-appid">Steam AppID</label><input id="new-appid" name="appid" type="number" min="1" max="2147483647" step="1" inputmode="numeric" required placeholder="Например, 570"><label for="game-label">Твоё название (необязательно)</label><input id="game-label" name="label" maxlength="120" autocomplete="off"><button class="secondary">Добавить по AppID</button></form><p class="small-text">AppID — число в адресе игры Steam после /app/. Название не проверяется. Добавление не включает доступ или выбор игры. Метаданные можно разрешить отдельно; декодер прогресса нужен не для каждой операции.</p></section>' if csrf is not None else '')
+        selected = [g for g in catalog if g.get('selected')]
+        shelf = '<div class="catalog-tiles">' + ''.join(game_tile('Сводка доступна' if 'saves.summary' in g.get('scopes',[]) else 'Доступ отдельно',g['appid'],g['appid']==active,g['title']) for g in selected) + '</div>' if selected else '<p class="library-empty">Выбери игры, которые проходишь. Доступ к данным включается отдельно.</p>'
+        choices = ''.join(f'<div class="game-choice {"focused" if g["appid"]==active else ""}"><label for="choose-{g["appid"]}"><input id="choose-{g["appid"]}" type="checkbox" name="game_{g["appid"]}" value="yes" {"checked" if g.get("selected") else ""}><span>{esc(g["title"])}<small>{"Название задано пользователем; не проверено. " if g.get("user_label_unverified", g["appid"] not in GAMES) else ""}AppID {g["appid"]}</small><small>{"Выбрана" if g.get("selected") else "Не выбрана"} / {"Есть разрешения" if g.get("scopes") else "Нет разрешений"}</small></span></label></div>' for g in catalog)
+        content = shelf + f'<details class="manage-games" {"open" if not selected else ""}><summary>Выбрать игры и доступ</summary><form method="post" action="/account/games" class="game-chooser">{hidden("csrf",csrf)}<fieldset><legend>Выбери одну или несколько</legend>{choices}</fieldset><div class="chooser-actions"><button class="primary" name="action" value="review">Проверить выбор</button><button class="secondary" name="action" value="review_all">Выбрать все текущие ({len(catalog)})</button></div></form><p class="small-text">Выбор сохраняется после проверки. Разрешения на данные задаются отдельно для каждой игры.</p></details>'
+    add_form = (f'<details class="add-game"><summary>Добавить по Steam AppID</summary><form method="post" action="/account/games/add">{hidden("csrf",csrf)}<label for="new-appid">Steam AppID</label><input id="new-appid" name="appid" type="number" min="1" max="2147483647" step="1" inputmode="numeric" required placeholder="Например, 570"><label for="game-label">Твоё название (необязательно)</label><input id="game-label" name="label" maxlength="120" autocomplete="off"><button class="secondary">Добавить по AppID</button></form><p class="small-text">AppID — число в адресе игры Steam после /app/. Название не проверяется. Добавление не включает доступ или выбор игры.</p></details>' if csrf is not None else '')
     return f'<aside class="library" id="library"><div class="library-heading"><h1>Игры сервиса</h1><span>{len(catalog)} в каталоге</span></div>{content}{add_form}<p class="library-note">Добавленные игры, не библиотека твоего Steam. «Все текущие» не включает будущие добавления.</p><a class="plain-link community-link" href="https://github.com/sevakode/game-assist/blob/main/CONTRIBUTING.md" rel="noreferrer">Как добавить поддержку игры</a></aside>'
 
 
@@ -59,16 +125,25 @@ def games_review_body(csrf, catalog, catalog_revision='initial-three-v1'):
     entries = game_catalog({'catalog':catalog})
     planned = {g['appid']:g for g in entries}
     titles = {g['appid']:g['title'] for g in entries}
-    rows = ''.join(f'<li><strong>{esc(title)}</strong>{"<small>Название задано пользователем; не проверено.</small>" if appid not in GAMES else ""}<span>{"Будет выбрана" if planned.get(appid, {}).get("selected") else "Не выбрана"}</span><small>{"Доступна только сводка из четырёх полей." if appid==4231820 else "Можно разрешить метаданные файла. Декодер прогресса недоступен."}</small></li>' for appid,title in titles.items())
+    rows = ''.join(f'<li><strong>{esc(title)}</strong>{"<small>Название задано пользователем; не проверено.</small>" if planned[appid].get("user_label_unverified", appid not in GAMES) else ""}<span>{"Будет выбрана" if planned.get(appid, {}).get("selected") else "Не выбрана"}</span><small>{"Доступна только сводка из четырёх полей." if appid==4231820 else "Можно разрешить метаданные файла. Декодер прогресса недоступен."}</small></li>' for appid,title in titles.items())
     fields = ''.join(hidden(f'game_{appid}', 'yes') for appid in titles if planned.get(appid, {}).get('selected'))
     metadata_controls = ''.join(f'<label class="check"><input type="checkbox" name="metadata_{appid}" value="yes" {"checked" if planned[appid].get("metadata_authorized") or "saves.metadata" in planned[appid].get("scopes", []) else ""}><span>Метаданные: {esc(titles[appid])}<small>Только размер файла и время изменения. Без пути, имени, содержимого и прогресса.</small></span></label>' for appid in titles if planned[appid].get('selected'))
     belmont = planned.get(4231820, {})
     permission = (f'<label class="check"><input type="checkbox" name="summary_4231820" value="yes" {"checked" if belmont.get("authorized") else ""}><span>Разрешить сводку Belmont’s Curse<small>Только текущие здоровье, мана и два сырых счётчика фрагментов. Не максимумы и не полное прохождение.</small></span></label>' if belmont.get('selected') else '<p class="small-text">Belmont’s Curse не выбрана: разрешение на её сводку будет отключено.</p>')
-    return f'<div class="form-page"><a class="back-link" href="/#library">Изменить выбор</a><h1>Проверка выбранных игр</h1><p class="intro">Только перечисленные здесь игры. Будущие добавления не включаются. Выбор не подтверждает владение игрой и сам по себе не разрешает чтение данных.</p><ul class="game-review">{rows}</ul><form method="post" action="/account/games">{hidden("csrf",csrf)}{hidden("action","confirm")}{hidden("catalog_revision",catalog_revision)}{fields}<fieldset class="review-permissions"><legend>Разрешения на данные</legend>{metadata_controls}{permission}<p class="small-text">Локальный компаньон читает только явно выбранный файл без изменений. На сервер уйдут лишь отмеченные здесь сведения, не содержимое сейва. Достижения, карта и Steam Cloud недоступны.</p></fieldset><p class="capability-note">Снятие выбора отключит доступ этой игры и удалит её серверные сводки и уведомления. Локальные сохранения не меняются.</p><div class="action-row"><button class="primary">Сохранить игры и разрешения</button><a class="plain-link" href="/#library">Отмена</a></div></form></div>'
+    return f'<div class="form-page"><a class="back-link" href="/#library">Изменить выбор</a><h1>Проверка выбранных игр</h1><p class="intro">Только перечисленные здесь игры. Будущие добавления не включаются. Выбор не подтверждает владение игрой и сам по себе не разрешает чтение данных.</p><ul class="game-review">{rows}</ul><form method="post" action="/account/games">{hidden("csrf",csrf)}{hidden("action","confirm")}{hidden("catalog_revision",catalog_revision)}{fields}<fieldset class="review-permissions"><legend>Разрешения на данные</legend>{metadata_controls}{permission}<p class="small-text">Локальный компаньон читает только явно выбранный файл без изменений. На сервер уйдут лишь отмеченные здесь сведения, не содержимое сейва. Карта и Steam Cloud недоступны. Доступ к достижениям задаётся отдельно в карточке выбранной игры; здесь он не включается.</p></fieldset><p class="capability-note">Снятие выбора отключит доступ этой игры и удалит её серверные сводки и уведомления. Локальные сохранения не меняются.</p><div class="action-row"><button class="primary">Сохранить игры и разрешения</button><a class="plain-link" href="/#library">Отмена</a></div></form></div>'
 
 
 def selected_header(appid=4231820, title=None):
-    return f'<header class="game-heading" id="selected-game"><p>Открыта игра</p><h2>{esc(title or GAMES.get(appid, f"Steam AppID {appid}"))}</h2></header><nav class="section-nav" aria-label="Разделы игры"><a href="#context">Сводка</a><a href="#permissions">Доступ</a><a href="#assistant">Помощник</a></nav>'
+    name = title or GAMES.get(appid, f'Steam AppID {appid}')
+    support = 'Частичный разбор' if appid == 4231820 else 'Декодер не подключён'
+    return f'<header class="game-heading" id="selected-game"><div class="selected-cover cover-{appid}" aria-hidden="true">{cover_art(appid)}</div><div class="game-heading-copy"><p>Steam AppID {appid}</p><h2>{esc(name)}</h2><div class="game-badges"><span class="support-badge">{support}</span><span>Только чтение</span></div></div></header><nav class="section-nav" aria-label="Разделы игры"><a href="#context">Сводка</a><a href="#capabilities">Что видит AI</a><a href="#permissions">Доступ</a><a href="#assistant">Помощник</a></nav>'
+
+
+def capabilities_panel(appid):
+    partial = appid == 4231820
+    rows = [('Текущие здоровье и мана', 'Доступны в сводке' if partial else 'Нет декодера', partial), ('Счётчики фрагментов HP / MP', 'Сырые значения' if partial else 'Нет декодера', partial), ('Найденные улучшения и предметы', 'Не определяются', False), ('Побеждённые боссы', 'Не определяются', False), ('Карта и задания', 'Не определяются', False)]
+    entries = ''.join(f'<li><span class="visibility-icon {"available" if known else "unknown"}" aria-hidden="true">{"✓" if known else "−"}</span><span>{esc(label)}</span><strong>{esc(state)}</strong></li>' for label,state,known in rows)
+    return f'<section class="capabilities-card" id="capabilities"><div class="section-title"><h3>Что видит AI</h3><span class="status-text">{"Формат 1.1.3" if partial else "Разбор не реализован"}</span></div><p class="small-text">Возможности декодера, не подтверждение полученных данных. Доступ включается тобой отдельно.</p><ul class="capability-list">{entries}</ul><p class="privacy-foot">Без изменения или перезаписи сохранений.</p><details><summary>Почему нет процента расшифровки</summary><p class="small-text">Полный набор полей и их смысл пока не проверены. Четыре значения не означают полное прохождение. Достижения берутся отдельно из Steam, только уже открытые.</p></details></section>'
 
 
 def game_permissions(game, csrf):
@@ -88,6 +163,38 @@ def game_permissions(game, csrf):
     return f'<section class="utility-section" id="permissions"><div class="section-title"><h3>Доступ к этой игре</h3><span class="status-text">{"Есть разрешения" if scopes else "Не разрешён"}</span></div><p>Метаданные выбранного сейва — только размер и время изменения. Без имени, пути, хеша и содержимого файла.</p><p class="small-text">{summary_note}</p><div class="action-row">{control}</div><p class="small-text">Разрешение не означает, что устройство подключено или данные уже получены. Файл читается локально, без изменений.</p>{revoke}</section>'
 
 
+def achievements_panel(catalog_game, projection_game, csrf):
+    """Only explicitly permitted cached unlocked records; never a full catalogue."""
+    selected = bool(catalog_game.get('selected'))
+    configured = bool(catalog_game.get('achievements_available'))
+    authorized = bool(catalog_game.get('achievements_authorized'))
+    appid = catalog_game['appid']
+    controls = []
+    if selected and (configured or authorized):
+        controls.append(f'<form method="post" action="/account/games/permissions">{hidden("csrf",csrf)}{hidden("appid",appid)}{hidden("scope","achievements.read")}{hidden("enabled","no" if authorized else "yes")}<button class="secondary">{"Отключить достижения" if authorized else "Разрешить открытые достижения"}</button></form>')
+    if selected and configured and authorized:
+        controls.append(f'<form method="post" action="/account/achievements/refresh">{hidden("csrf",csrf)}{hidden("appid",appid)}<button class="secondary">Обновить из Steam</button></form>')
+    cached = (projection_game or {}).get('achievements') or {}
+    if not selected:
+        content = '<p>Сначала выбери эту игру. Доступ к достижениям включается отдельно.</p>'
+    elif not configured:
+        content = '<p>Доступ к Steam Web API не настроен оператором сервиса. Тебе не нужно передавать API-ключ.</p>'
+    elif not authorized:
+        content = '<p>Чтение достижений выключено. Разрешение относится только к этой игре и не даёт доступ к сохранениям или Steam Cloud.</p>'
+    elif cached.get('status') == 'ok':
+        items = cached.get('items') or []
+        rows = ''.join(f'<li><p>{esc(item.get("name") or "Открытое достижение")}</p><span class="small-text">Время открытия: {esc(timestamp(item.get("unlock_time")))}</span></li>' for item in items)
+        content = ('<ul class="inbox-list">'+rows+'</ul>' if rows else '<p>Steam не вернул открытых достижений. Это не определяет процент или завершённость игры.</p>')
+        content += f'<p class="small-text">Получено из Steam Web API: {esc(timestamp(cached.get("received_at")))}</p>'
+    elif cached.get('status') == 'expired':
+        content = '<p>Срок хранения предыдущего ответа истёк. Обнови данные вручную; текущий прогресс неизвестен.</p>'
+    elif cached.get('status') in ('unavailable', 'not_configured'):
+        content = '<p>Данные сейчас недоступны. Это не означает отсутствие достижений или нулевой прогресс.</p>'
+    else:
+        content = '<p>Данные ещё не запрошены. После разрешения нажми «Обновить из Steam».</p>'
+    return f'<section class="utility-section" id="achievements"><div class="section-title"><h3>Открытые достижения</h3><span class="status-text">Steam Web API</span></div>{content}<div class="action-row">{"".join(controls)}</div><p class="small-text">Только подтверждённые Steam открытые достижения. Закрытые названия, общий список и процент не показываются. Обновление вручную; это не Steam Cloud и не непрерывная синхронизация.</p></section>'
+
+
 def metadata_panel(game):
     metadata = (game or {}).get('metadata')
     if not metadata:
@@ -100,14 +207,20 @@ def metadata_panel(game):
 
 
 def cloud_notice():
-    return '<p class="capability-note"><strong>Steam Cloud недоступен.</strong> Можно подключить Deck; для Belmont’s Curse также доступен ручной импорт локального файла. Установка компаньона необязательна.</p>'
+    return '<details class="source-details"><summary>Откуда берутся данные</summary><p class="capability-note"><strong>Steam Cloud недоступен.</strong> Можно подключить Deck; для Belmont’s Curse также доступен ручной импорт локального файла. Установка компаньона необязательна.</p></details>'
 
 
-def landing_body(selected_appid=None):
-    active = focus_id(selected_appid)
+def welcome_panel():
+    return '<section class="welcome" aria-labelledby="welcome-title"><div class="welcome-copy"><h1 id="welcome-title">Игровая сводка для твоего AI-помощника</h1><p>Передай данные сохранения в подключённый AI, чтобы не переписывать их вручную. На этом сайте нет чата. Разговор об игре можно вести без сюжетных спойлеров.</p><p class="welcome-prerequisites">Для первого импорта нужны аккаунт Steam и уже имеющийся файл Belmont’s Curse формата 1.1.3. Для вопросов по сводке отдельно нужен AI-клиент с поддержкой MCP; для просмотра сайта он не требуется.</p><div class="action-row"><a class="button primary" href="/login">Начать со Steam</a><a class="plain-link" href="#library">Посмотреть игры</a></div><p class="welcome-status">Сейчас читаются текущие здоровье, мана и два счётчика фрагментов Belmont. Для других игр декодеров пока нет. Облачные сейвы не подключены.</p></div><ol class="start-steps"><li><strong>Войди через Steam</strong><span>Пароль вводится только на сайте Steam. Вход подтверждает аккаунт, но не даёт доступ к облачным сейвам.</span></li><li><strong>Выбери игру и разрешения</strong><span>Начни с одной игры. Добавление в список само по себе не разрешает чтение данных.</span></li><li><strong>Импортируй сводку, затем подключи AI</strong><span>Файл Belmont разбирается в браузере без установки на Deck. Затем подключи Game Assist в AI-клиенте и задай вопрос там.</span></li></ol><div class="welcome-example"><span>Пример запроса после импорта Belmont и подключения AI</span><p>«Покажи текущие здоровье и ману из моей сводки. Без сюжетных спойлеров».</p></div><details class="welcome-limits"><summary>Что уже работает и чего пока нет</summary><p>Сейчас доступны выбор игр, отдельные разрешения и ручной импорт Belmont’s Curse: текущие здоровье, мана и два сырых счётчика фрагментов. Файл разбирается в браузере без установки на Deck.</p><p>Компаньон для Deck необязателен. Для других игр пока доступны только метаданные выбранного файла, без расшифровки прогресса. Автоматическое получение облачных сейвов не работает; библиотека Steam и достижения требуют настройки сервиса. Помощник подключается отдельно. Здесь нет встроенного чата и нет готовой полной базы прохождений.</p></details></section>'
+
+
+def landing_body(selected_appid=None, discovery_catalog=None):
+    discovery = {g['appid']:g for g in (discovery_catalog or []) if type(g.get('appid')) is int}
+    active = focus_id(selected_appid, [*GAMES, *discovery])
+    selected_title = GAMES.get(active, discovery.get(active, {}).get('name'))
     context_copy = 'Войди, чтобы управлять доступом к игровым данным.' if active == 4231820 else 'Декодер этой игры пока недоступен. Можно отдельно разрешить метаданные сейва: размер и время изменения, без содержимого.'
     device_actions = '<div class="action-row"><a class="button secondary" href="/setup">Настройка Deck</a><a class="plain-link" href="/devices/approve">У меня есть код</a></div>' if active == 4231820 else ''
-    return f'''<div class="account-strip"><div><strong>Аккаунт не подключён</strong><p>Вход и разрешения через Steam.</p></div><a class="button primary" href="/login">Войти через Steam</a></div><div class="console-layout">{library('Нет данных аккаунта', active)}<div class="workspace">{selected_header(active)}<section class="context-section" id="context"><div class="section-title"><h3>Сводка игры</h3><span class="status-text">Нет данных</span></div><div class="empty-context"><div class="save-icon" aria-hidden="true"></div><div><h4>Пока без сводки</h4><p>{context_copy}</p><p class="small-text">Пароль вводится только на сайте Steam.</p></div></div>{cloud_notice()}{device_actions}</section><section class="utility-section" id="permissions"><h3>Доступ к играм</h3><p>После входа можно добавлять игры по Steam AppID, выбирать одну, несколько или все текущие и проверять разрешения для каждой. Для Elden Ring и The Witcher 3 доступны метаданные, но расшифровка прогресса пока недоступна.</p><a class="plain-link" href="/login">Выбрать игры и разрешения</a></section><section class="utility-section" id="assistant"><div class="section-title"><h3>Помощник</h3><span class="status-text">Подключается отдельно</span></div><p>Здесь нет чата. Можно обсуждать игру в своём ChatGPT или Claude и без компаньона. Для передачи сводки подключи помощника после входа.</p></section><section class="utility-section" id="updates"><div class="section-title"><h3>Обновления</h3><span class="status-text">Не включены</span></div><p>Изменения разрешённой сводки можно получать на этой странице после импорта или передачи с устройства. Не push-уведомления.</p></section></div></div>'''
+    return f'''{welcome_panel()}<div class="console-layout">{library('Нет данных аккаунта', active)}<div class="workspace">{selected_header(active, selected_title)}<section class="context-section" id="context"><div class="section-title"><h3>Сводка игры</h3><span class="status-text">Нет данных</span></div><div class="empty-context"><div class="save-icon" aria-hidden="true"></div><div><h4>Пока без сводки</h4><p>{context_copy}</p><p class="small-text">Пароль вводится только на сайте Steam.</p></div></div>{cloud_notice()}{device_actions}</section>{capabilities_panel(active)}{discovery_panel(discovery_catalog, GAMES)}<section class="utility-section" id="permissions"><h3>Доступ к играм</h3><p>После входа можно добавлять игры по Steam AppID, выбирать одну, несколько или все текущие и проверять разрешения для каждой. Для Elden Ring и The Witcher 3 доступны метаданные, но расшифровка прогресса пока недоступна.</p><a class="plain-link" href="/login">Выбрать игры и разрешения</a></section><section class="utility-section" id="assistant"><div class="section-title"><h3>Помощник</h3><span class="status-text">Подключается отдельно</span></div><p>Здесь нет чата. Можно обсуждать игру в своём ChatGPT или Claude и без компаньона. Для передачи сводки подключи помощника после входа.</p></section><section class="utility-section" id="updates"><div class="section-title"><h3>Обновления</h3><span class="status-text">Не включены</span></div><p>Изменения разрешённой сводки можно получать на этой странице после импорта или передачи с устройства. Не push-уведомления.</p></section></div></div>'''
 
 
 def timestamp(value):
@@ -134,6 +247,8 @@ def home_body(projection, csrf, inbox=None, capabilities=None):
     catalog = game_catalog(capabilities)
     active = focus_id(capabilities.get('selected_appid'), [g['appid'] for g in catalog])
     current = next(g for g in catalog if g['appid'] == active)
+    if 'catalog' in capabilities and not any(g.get('selected') for g in catalog) and not projection.get('games'):
+        return f'''<div class="account-strip signed-in"><div><strong>Steam подключён</strong><p>Начни с игр, которые проходишь.</p></div><a class="plain-link" href="#account">Настройки доступа</a></div><div class="console-layout">{library('Игры не выбраны', None, catalog, csrf)}<div class="workspace">{owned_library_panel(csrf, capabilities.get("owned_library"), {g["appid"] for g in catalog})}<section class="first-game" id="context"><span class="first-game-symbol" aria-hidden="true">{cover_art(0)}</span><h2>Выбери игры, которые проходишь</h2><p>Выбери первую игру в списке. Потом реши, какие сведения сможет видеть помощник.</p><a class="button primary" href="#library">Выбрать игры</a><p class="small-text">Вход через Steam не открывает доступ к сейвам автоматически.</p></section>{discovery_panel(capabilities.get('discovery_catalog'), {g['appid'] for g in catalog}, csrf)}<section class="utility-section" id="assistant"><h3>Подключить помощника</h3><p>Здесь нет чата. Подключи Game Assist к своему Claude или ChatGPT, чтобы обсуждать разрешённые данные без спойлеров.</p>{connection_panel(capabilities.get('mcp_url'))}</section><details class="utility-section account" id="account"><summary>Настройки доступа</summary><form method="post" action="/logout">{hidden('csrf',csrf)}<button class="secondary">Выйти из аккаунта</button></form><details class="revoke-confirm"><summary>Отозвать весь доступ</summary><p>Это отключит устройства и помощников и удалит сводки с сервера.</p><form method="post" action="/account/revoke">{hidden('csrf',csrf)}<button class="danger">Отозвать весь доступ</button></form></details></details></div></div>'''
     game = next((g for g in projection.get('games', []) if g.get('appid') == active), None)
     summary = game.get('summary') if game and active == 4231820 else None
     status = ('Ручной импорт' if game.get('summary_source') == 'browser_manual' else 'Сводка от устройства') if summary else 'Сводки пока нет'
@@ -142,21 +257,23 @@ def home_body(projection, csrf, inbox=None, capabilities=None):
         metrics = ''.join(f'<div class="metric"><dt>{label}</dt><dd>{esc(scalar_text(scalars.get(key)))}</dd></div>' for key, label in [('currentHealth','Текущее здоровье'),('currentMana','Текущая мана'),('healthUpgradeFragmentCount','Фрагменты здоровья'),('manaUpgradeFragmentCount','Фрагменты маны')])
         progress = f'''<dl class="metrics">{metrics}</dl><p class="small-text received">Получено: {esc(timestamp(game.get('summary_received_at', game.get('received_at'))))}</p><details class="data-details"><summary>Что означают эти значения</summary><p>Это переданные значения, не независимая проверка игры. Время самого сохранения неизвестно. Здоровье и мана — не максимумы; смысл счётчиков фрагментов не подтверждён. Карта, процент прохождения и достижения по ним не определяются.</p></details>'''
     else:
-        progress = '<div class="empty-context"><div class="save-icon" aria-hidden="true"></div><div><h4>Пока без сводки</h4><p>Нет разрешённой сводки от устройства. Можно подключить Deck или пользоваться помощником без него.</p></div></div>'
+        progress = '<div class="empty-context"><div class="save-icon" aria-hidden="true"></div><div><h4>Пока без сводки</h4><p>Можно импортировать файл прямо здесь или подключить Deck. Сначала выбери игру и разреши чтение сводки.</p></div></div>'
     if active != 4231820:
         status = 'Декодер недоступен'
         progress = '<div class="empty-context"><div><h4>Прогресс пока не расшифровывается</h4><p>Для этой игры нет проверенного декодера. Метаданные файла можно подключить отдельно; они не раскрывают прохождение, достижения или карту.</p></div></div>'
     inbox = (inbox or {'enabled': False, 'items': []}) if active == 4231820 else {'enabled':False, 'items':[]}
-    device_actions = '<div class="action-row"><a class="button primary" href="/devices/approve">Подключить по коду</a><a class="plain-link" href="/setup">Настройка Deck</a></div>'
+    device_actions = '<div class="action-row"><a class="button secondary" href="/devices/approve">Подключить по коду</a><a class="plain-link" href="/setup">Настройка Deck</a></div>'
     if active == 4231820:
-        device_actions += '<a class="plain-link" href="/import">Импорт с этого устройства без установки Deck</a>'
+        device_actions = '<div class="action-row"><a class="button primary" href="/import">Импортировать сводку</a><a class="plain-link" href="/setup">Подключить Deck</a></div>'
+    if not current.get('selected') and not summary:
+        device_actions = '<p class="selection-required">Эта игра ещё не выбрана. Отметь её в списке игр и нажми «Проверить выбор».</p><a class="button secondary" href="#library">Перейти к выбору игр</a>'
     enabled = bool(inbox.get('enabled'))
     updates = ''.join(f'<li><div><p>{esc(item.get("message", "Новая сводка устройства"))}</p><time class="small-text">{esc(timestamp(item.get("created_at")))}</time></div>' + (f'<form method="post" action="/account/notifications/read">{hidden("csrf", csrf)}{hidden("notification_id", item.get("id", ""))}<button class="secondary compact">Прочитано</button></form>' if not item.get('read') else '<span class="status-text">Прочитано</span>') + '</li>' for item in inbox.get('items', []))
     updates = f'<ul class="inbox-list">{updates}</ul>' if updates else '<p class="empty-inbox">Пока нет уведомлений.</p>'
     control = (f'<form class="notification-control" method="post" action="/account/notifications">{hidden("csrf", csrf)}{hidden("appid", "4231820")}{hidden("enabled", "no" if enabled else "yes")}<button class="secondary">{"Выключить обновления" if enabled else "Включить обновления"}</button></form>' if enabled or inbox.get('can_enable') else '<p class="small-text">Для включения нужно разрешение на чтение сводки.</p>')
     if active != 4231820:
         control = '<p class="small-text">Обновления для этой игры недоступны: декодер не реализован.</p>'
-    return f'''<div class="account-strip signed-in"><div><strong>Steam подключён</strong><p>Разрешения можно изменить в настройках доступа.</p></div><a class="plain-link" href="#library">Выбрать игры и доступ</a></div><div class="console-layout">{library(status, active, catalog, csrf)}<div class="workspace">{selected_header(active, current["title"])}<section class="context-section" id="context"><div class="section-title"><h3>Сводка игры</h3><span class="status-text">{esc(status)}</span></div>{progress}{metadata_panel(game)}{cloud_notice()}{device_actions}</section>{game_permissions(current, csrf)}<section class="utility-section" id="updates"><div class="section-title"><h3>Обновления</h3><span class="status-text">{'Включены' if enabled else 'Выключены'}</span></div>{updates}{control}<p class="small-text">Только на сайте, не push. Новые уведомления появляются при изменениях разрешённой сводки.</p></section><section class="utility-section" id="assistant"><div class="section-title"><h3>Помощник</h3><span class="status-text">Через MCP</span></div><p>Здесь нет чата. ChatGPT или Claude могут читать разрешённые сводки и метаданные после отдельного OAuth-согласия.</p>{connection_panel(capabilities.get('mcp_url'))}</section><details class="utility-section account" id="account"><summary>Настройки доступа</summary><p>Доступ устройств и помощников можно отозвать. Сохранения на Deck останутся без изменений.</p><div class="account-actions"><form method="post" action="/logout">{hidden('csrf',csrf)}<button class="secondary">Выйти из аккаунта</button></form><details class="revoke-confirm"><summary>Отозвать весь доступ</summary><p>Это отключит устройства и помощников и удалит сводки с сервера.</p><form method="post" action="/account/revoke">{hidden('csrf',csrf)}<button class="danger">Отозвать весь доступ</button></form></details></div></details></div></div>'''
+    return f'''<div class="account-strip signed-in"><div><strong>Steam подключён</strong><p>Разрешения можно изменить в настройках доступа.</p></div><a class="plain-link" href="#library">Выбрать игры и доступ</a></div><div class="console-layout">{library(status, active, catalog, csrf)}<div class="workspace">{owned_library_panel(csrf, capabilities.get("owned_library"), {g["appid"] for g in catalog})}{selected_header(active, current["title"])}<section class="context-section" id="context"><div class="section-title"><h3>Сводка игры</h3><span class="status-text">{esc(status)}</span></div>{progress}{device_actions}{metadata_panel(game)}{cloud_notice()}</section>{capabilities_panel(active)}{discovery_panel(capabilities.get("discovery_catalog"), {g["appid"] for g in catalog}, csrf)}{game_permissions(current, csrf)}{achievements_panel(current, game, csrf)}<section class="utility-section" id="updates"><div class="section-title"><h3>Обновления</h3><span class="status-text">{'Включены' if enabled else 'Выключены'}</span></div>{updates}{control}<p class="small-text">Только на сайте, не push. Новые уведомления появляются при изменениях разрешённой сводки.</p></section><section class="utility-section" id="assistant"><div class="section-title"><h3>Помощник</h3><span class="status-text">Через MCP</span></div><p>Здесь нет чата. ChatGPT или Claude могут читать разрешённые сводки, метаданные и сохранённые открытые достижения после отдельного OAuth-согласия.</p>{connection_panel(capabilities.get('mcp_url'))}</section><details class="utility-section account" id="account"><summary>Настройки доступа</summary><p>Доступ устройств и помощников можно отозвать. Сохранения на Deck останутся без изменений.</p><div class="account-actions"><form method="post" action="/logout">{hidden('csrf',csrf)}<button class="secondary">Выйти из аккаунта</button></form><details class="revoke-confirm"><summary>Отозвать весь доступ</summary><p>Это отключит устройства и помощников и удалит сводки с сервера.</p><form method="post" action="/account/revoke">{hidden('csrf',csrf)}<button class="danger">Отозвать весь доступ</button></form></details></div></details></div></div>'''
 
 
 def device_body(csrf, catalog=None, requested=None):
@@ -165,13 +282,13 @@ def device_body(csrf, catalog=None, requested=None):
     request_appid = requested.get('appid') if isinstance(requested, dict) else None
     options = ''.join(f'<option value="{g["appid"]}" {"selected" if request_appid==g["appid"] else ""}>{esc(g["title"])}</option>' for g in selected)
     request_note = f'<p class="capability-note">Устройство запрашивает AppID {esc(request_appid)}. Проверь совпадение с игрой на Deck.</p>' if request_appid else ''
-    empty_note = '<p class="capability-note">Сначала выбери игры на главной и сохрани выбор.</p>' if not selected else ''
+    empty_note = '<p class="capability-note">Сначала выбери игры на главной и сохрани выбор.</p><a class="button secondary" href="/#library">Выбрать игры</a>' if not selected else ''
     summary_option = ('<label class="check"><input type="checkbox" name="saves.summary" value="yes"><span>Сводка Belmont’s Curse<small>Только для AppID 4231820: текущие здоровье, мана и два счётчика фрагментов. Для другой игры не отмечай.</small></span></label>' if any(g['appid']==4231820 for g in selected) and request_appid in (None,4231820) else '<p class="small-text">Сводка прогресса для этой игры недоступна; можно передать только метаданные.</p>')
-    return f'<div class="form-page"><a class="back-link" href="/">К играм</a><h1>Подключение Deck</h1><p class="intro">Введи код, показанный на твоём Steam Deck. Не подтверждай код, присланный другим человеком.</p>{request_note}{empty_note}<form class="form-stack" method="post">{hidden("csrf",csrf)}<label for="device-code">Код устройства</label><input id="device-code" class="code-input" name="user_code" minlength="8" maxlength="8" pattern="[A-Fa-f0-9]{{8}}" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="A1B2C3D4" required><label for="game-select">Игра</label><select id="game-select" name="appid" required><option value="">Выбери игру с экрана Deck</option>{options}</select><fieldset><legend>Что разрешено передавать</legend><label class="check"><input type="checkbox" name="saves.metadata" value="yes"><span>Метаданные выбранного сейва<small>Только размер файла и время изменения. Без имени, пути, хеша и содержимого.</small></span></label>{summary_option}</fieldset><p class="small-text">Выбери разрешения, совпадающие с запросом на Deck. Доступ помощника подтверждается отдельно. Компаньон не изменяет файл; содержимое сейва на сервер не отправляется.</p><div class="action-row"><button class="primary">Подключить устройство</button><a class="plain-link" href="/">Отмена</a></div></form></div>'
+    return f'<div class="form-page"><a class="back-link" href="/">К играм</a><h1>Подключение Deck</h1><p class="intro">Введи код, показанный на твоём Steam Deck. Не подтверждай код, присланный другим человеком.</p>{request_note}{empty_note}<form class="form-stack" method="post">{hidden("csrf",csrf)}<label for="device-code">Код устройства</label><input id="device-code" class="code-input" name="user_code" minlength="8" maxlength="8" pattern="[A-Fa-f0-9]{{8}}" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="A1B2C3D4" required><label for="game-select">Игра</label><select id="game-select" name="appid" required><option value="">Выбери игру с экрана Deck</option>{options}</select><fieldset><legend>Что разрешено передавать</legend><label class="check"><input type="checkbox" name="saves.metadata" value="yes"><span>Метаданные выбранного сейва<small>Только размер файла и время изменения. Без имени, пути, хеша и содержимого.</small></span></label>{summary_option}</fieldset><p class="small-text">Выбери разрешения, совпадающие с запросом на Deck. Доступ помощника подтверждается отдельно. Компаньон не изменяет файл; содержимое сейва на сервер не отправляется.</p><div class="action-row"><button class="primary" {"disabled" if not selected else ""}>Подключить устройство</button><a class="plain-link" href="/">Отмена</a></div></form></div>'
 
 
 def consent_body(csrf, req, client_label):
-    return f'''<div class="form-page"><a class="back-link" href="/">К играм</a><h1>Доступ помощника</h1><p class="intro">Разрешить этому клиенту читать игровые сводки и метаданные?</p><div class="client-label"><strong>Клиент и адрес возврата</strong><p>{esc(client_label)}</p></div><ul class="permission-list"><li>Только разрешённые тобой сводки и метаданные.</li><li>Без сырых сохранений и Steam ID.</li><li>Переданные факты покинут Game Assist.</li></ul><p class="small-text">Доступ можно отозвать в настройках на главной.</p><form method="post">{hidden('csrf',csrf)}{hidden('request',req)}<div class="action-row"><button class="primary">Разрешить чтение данных</button><a class="plain-link" href="/">Не подключать</a></div></form></div>'''
+    return f'''<div class="form-page"><a class="back-link" href="/">К играм</a><h1>Доступ помощника</h1><p class="intro">Разрешить этому клиенту читать разрешённые игровые данные?</p><div class="client-label"><strong>Клиент и адрес возврата</strong><p>{esc(client_label)}</p></div><ul class="permission-list"><li>Только разрешённые тобой сводки, метаданные и сохранённые открытые достижения.</li><li>Без сырых сохранений и Steam ID.</li><li>Переданные факты покинут Game Assist.</li></ul><p class="small-text">Доступ можно отозвать в настройках на главной.</p><form method="post">{hidden('csrf',csrf)}{hidden('request',req)}<div class="action-row"><button class="primary">Разрешить чтение данных</button><a class="plain-link" href="/">Не подключать</a></div></form></div>'''
 
 
 def approved_body():

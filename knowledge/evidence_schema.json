@@ -1,0 +1,336 @@
+{
+  "$defs": {
+    "Observation": {
+      "additionalProperties": false,
+      "properties": {
+        "field_category": {
+          "enum": [
+            "current_health",
+            "current_mana",
+            "maximum_health",
+            "maximum_mana",
+            "health_fragment_counter",
+            "mana_fragment_counter",
+            "candidate_item_flag",
+            "array_position",
+            "other_unknown"
+          ],
+          "title": "Field Category",
+          "type": "string"
+        },
+        "change": {
+          "enum": [
+            "increased",
+            "decreased",
+            "unchanged",
+            "added",
+            "removed",
+            "type_changed",
+            "null",
+            "unknown"
+          ],
+          "title": "Change",
+          "type": "string"
+        },
+        "identity": {
+          "default": "unknown",
+          "enum": [
+            "not_applicable",
+            "schema_verified_stable",
+            "positional_only",
+            "unknown"
+          ],
+          "title": "Identity",
+          "type": "string"
+        }
+      },
+      "required": [
+        "field_category",
+        "change"
+      ],
+      "title": "Observation",
+      "type": "object"
+    },
+    "PrivatePair": {
+      "additionalProperties": false,
+      "description": "Optional LOCAL-ONLY hashes. Excluded from public_projection entirely.",
+      "properties": {
+        "before_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Before Sha256",
+          "type": "string"
+        },
+        "after_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "After Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "before_sha256",
+        "after_sha256"
+      ],
+      "title": "PrivatePair",
+      "type": "object"
+    },
+    "ReviewAttestation": {
+      "additionalProperties": false,
+      "description": "Maintainer-recorded review provenance; schema validation cannot authenticate it.",
+      "properties": {
+        "reviewer_alias": {
+          "pattern": "^reviewer-[a-z0-9-]{1,40}$",
+          "title": "Reviewer Alias",
+          "type": "string"
+        },
+        "review_reference": {
+          "pattern": "^review-[a-z0-9-]{1,60}$",
+          "title": "Review Reference",
+          "type": "string"
+        },
+        "reviewed_scope": {
+          "const": "structural_observations_only",
+          "title": "Reviewed Scope",
+          "type": "string"
+        }
+      },
+      "required": [
+        "reviewer_alias",
+        "review_reference",
+        "reviewed_scope"
+      ],
+      "title": "ReviewAttestation",
+      "type": "object"
+    },
+    "Trial": {
+      "additionalProperties": false,
+      "properties": {
+        "trial_id": {
+          "pattern": "^trial-[0-9]{1,4}$",
+          "title": "Trial Id",
+          "type": "string"
+        },
+        "role": {
+          "enum": [
+            "baseline",
+            "action",
+            "control",
+            "repeat"
+          ],
+          "title": "Role",
+          "type": "string"
+        },
+        "action": {
+          "enum": [
+            "hp_pickup",
+            "mana_pickup",
+            "spend_health",
+            "spend_mana",
+            "no_action",
+            "unknown"
+          ],
+          "title": "Action",
+          "type": "string"
+        },
+        "same_selected_slot": {
+          "title": "Same Selected Slot",
+          "type": "boolean"
+        },
+        "independent_in_game_observation": {
+          "title": "Independent In Game Observation",
+          "type": "boolean"
+        },
+        "stable_snapshots": {
+          "title": "Stable Snapshots",
+          "type": "boolean"
+        },
+        "originals_unchanged": {
+          "title": "Originals Unchanged",
+          "type": "boolean"
+        },
+        "confounders": {
+          "items": {
+            "enum": [
+              "autosave",
+              "other_pickup",
+              "resource_spend",
+              "random_event",
+              "slot_changed",
+              "partial_sync",
+              "unknown"
+            ],
+            "type": "string"
+          },
+          "maxItems": 7,
+          "title": "Confounders",
+          "type": "array"
+        },
+        "observations": {
+          "items": {
+            "$ref": "#/$defs/Observation"
+          },
+          "maxItems": 32,
+          "title": "Observations",
+          "type": "array"
+        },
+        "private_pair": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PrivatePair"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "trial_id",
+        "role",
+        "action",
+        "same_selected_slot",
+        "independent_in_game_observation",
+        "stable_snapshots",
+        "originals_unchanged"
+      ],
+      "title": "Trial",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "protocol": {
+      "const": "controlled-save-observation-v1",
+      "title": "Protocol",
+      "type": "string"
+    },
+    "appid": {
+      "exclusiveMinimum": 0,
+      "maximum": 2147483647,
+      "title": "Appid",
+      "type": "integer"
+    },
+    "game_version": {
+      "anyOf": [
+        {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Game Version"
+    },
+    "save_format_version": {
+      "anyOf": [
+        {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Save Format Version"
+    },
+    "platform": {
+      "enum": [
+        "windows",
+        "linux",
+        "steamos_proton",
+        "unknown"
+      ],
+      "title": "Platform",
+      "type": "string"
+    },
+    "parser_revision": {
+      "anyOf": [
+        {
+          "pattern": "^sha256:[a-f0-9]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Parser Revision"
+    },
+    "target": {
+      "enum": [
+        "hp_pickup",
+        "mana_pickup",
+        "resource_spend",
+        "unknown"
+      ],
+      "title": "Target",
+      "type": "string"
+    },
+    "status": {
+      "default": "hypothesis",
+      "enum": [
+        "hypothesis",
+        "verified"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "verification_scope": {
+      "const": "structural_observations_only",
+      "default": "structural_observations_only",
+      "title": "Verification Scope",
+      "type": "string"
+    },
+    "independent_review_completed": {
+      "default": false,
+      "title": "Independent Review Completed",
+      "type": "boolean"
+    },
+    "review_attestation": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ReviewAttestation"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "consented_local_comparison": {
+      "default": false,
+      "title": "Consented Local Comparison",
+      "type": "boolean"
+    },
+    "redaction_review_completed": {
+      "default": false,
+      "title": "Redaction Review Completed",
+      "type": "boolean"
+    },
+    "trials": {
+      "items": {
+        "$ref": "#/$defs/Trial"
+      },
+      "maxItems": 16,
+      "title": "Trials",
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema_version",
+    "protocol",
+    "appid",
+    "platform",
+    "target"
+  ],
+  "title": "EvidenceSubmission",
+  "type": "object"
+}

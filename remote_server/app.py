@@ -12,6 +12,7 @@ import re
 import secrets
 import shlex
 import time
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlencode, urlsplit
@@ -36,13 +37,20 @@ from server.app import SaveSummary
 from server.steam import SteamService, SteamError
 from .oauth import OAuthProvider
 from .database import Database
+from .achievements import AchievementReader
+from .library_reader import LibraryReader
 from . import ui
-from .games import CURRENT_GAME_IDS, CATALOG_REVISION, GAMES
+from .browser_errors import http_exception as browser_http_exception, wants_browser_error, error_page
+from .games import CURRENT_GAME_IDS, CATALOG_REVISION, GAMES, DISCOVERY_TITLES, discovery_catalog
 
 APPID = 4231820
 COOKIE = '__Host-ga_session'
 SCOPES = {'saves.summary','saves.metadata'}
+ACCOUNT_SCOPES = SCOPES | {'achievements.read'}
 MAX_GAMES = 100
+LIBRARY_ROWS_GLOBAL = 128
+ACHIEVEMENT_ROWS_GLOBAL = 512
+ACHIEVEMENT_ROWS_PER_OWNER = 20
 
 class SaveMetadataSummary(BaseModel):
     model_config = ConfigDict(extra='forbid')
@@ -100,6 +108,8 @@ class Store:
         self.path = str(path)
         self.database = database or Database(path)
         self.database.initialize()
+        self.achievements_available = False
+        self.library_available = False
 
     def db(self):
         return self.database.transaction()
@@ -135,14 +145,15 @@ class Store:
         grants={(row['appid'],row['scope']) for row in db.execute('SELECT appid,scope FROM grants WHERE owner=?',(owner,))}
         registered={row['appid']:row['label'] for row in db.execute('SELECT appid,label FROM game_registrations WHERE owner=?',(owner,))}
         ids=list(CURRENT_GAME_IDS)+sorted(set(registered)-set(CURRENT_GAME_IDS))
-        return [{'appid':appid,'name':GAMES[appid]['name'] if appid in CURRENT_GAME_IDS else (registered[appid] or f'Steam AppID {appid}'),
-                 'user_label_unverified':appid not in CURRENT_GAME_IDS,
+        return [{'appid':appid,'name':GAMES[appid]['name'] if appid in CURRENT_GAME_IDS else (registered[appid] or DISCOVERY_TITLES.get(appid) or f'Steam AppID {appid}'),
+                 'user_label_unverified':appid not in CURRENT_GAME_IDS and bool(registered[appid] or appid not in DISCOVERY_TITLES),
                  'selected':appid in selected,
                  'authorized':appid in selected and (appid,'saves.summary') in grants,
-                 'authorized_scopes':sorted(scope for scope in SCOPES if appid in selected and (appid,scope) in grants),
+                 'authorized_scopes':sorted(scope for scope in ACCOUNT_SCOPES if appid in selected and (appid,scope) in grants),
                  'metadata_authorized':appid in selected and (appid,'saves.metadata') in grants,
                  'summary_supported':appid==APPID,'metadata_supported':True,
-                 'cloud_available':False,'achievements_available':False,
+                 'cloud_available':False,'achievements_available':self.achievements_available,
+                 'achievements_authorized':appid in selected and (appid,'achievements.read') in grants,
                  'parser_version':'1.1.3' if appid==APPID else None,'save_format_version':'1.1.3' if appid==APPID else None,'game_build':None,
                  'source_status':'device_summary_only' if appid==APPID else 'metadata_only_parser_unavailable'} for appid in ids]
 
@@ -153,6 +164,9 @@ class Store:
     @staticmethod
     def revoke_scope(db,owner,appid,scope):
         db.execute('DELETE FROM grants WHERE owner=? AND appid=? AND scope=?',(owner,appid,scope))
+        if scope=='achievements.read':
+            db.execute('DELETE FROM achievement_cache WHERE owner=? AND appid=?',(owner,appid))
+            return
         for row in db.execute('SELECT hash,scopes FROM devices WHERE owner=? AND appid=?',(owner,appid)).fetchall():
             if scope in json.loads(row['scopes']):
                 db.execute('DELETE FROM events WHERE owner=? AND device_hash=?',(owner,row['hash']))
@@ -169,12 +183,30 @@ class Store:
 
     @staticmethod
     def revoke_game(db, owner, appid, deselect=False):
-        for scope in SCOPES:
+        for scope in ACCOUNT_SCOPES:
             Store.revoke_scope(db,owner,appid,scope)
         for table in ('grants','devices','observations','observations_v2','notification_settings','notifications','events','pairings'):
             db.execute(f'DELETE FROM {table} WHERE owner=? AND appid=?',(owner,appid))
         if deselect:
             db.execute('DELETE FROM game_selections WHERE owner=? AND appid=?',(owner,appid))
+
+    def library(self,owner):
+        with self.db() as db:
+            row=db.execute('SELECT * FROM library_cache WHERE owner=?',(owner,)).fetchone()
+            state={'configured':self.library_available,'enabled':bool(row),'status':'not_requested','games':[],'received_at':None,'source':'steam_web_api'}
+            if not self.library_available:state['status']='not_configured'
+            elif row:
+                state.update(status=row['status'],received_at=row['received_at'])
+                if row['expires'] and row['expires']<=time.time():
+                    state['status']='expired'
+                    db.execute("UPDATE library_cache SET payload=NULL,status='expired' WHERE owner=?",(owner,))
+                elif row['status']=='ok' and row['payload']:state['games']=json.loads(row['payload'])
+            return state
+
+    @staticmethod
+    def expire_achievements(db):
+        for row in db.execute('SELECT owner,appid FROM achievement_cache WHERE expires<? AND payload IS NOT NULL LIMIT 100',(time.time(),)).fetchall():
+            db.execute("UPDATE achievement_cache SET payload=NULL,status='expired' WHERE owner=? AND appid=?",(row['owner'],row['appid']))
 
     def projection(self, owner):
         result={'spoiler_policy':'strict','games':[]}
@@ -185,7 +217,18 @@ class Store:
                 if not game['selected'] or not scopes:
                     continue
                 item={'appid':game['appid'],'status':'unknown','summary':None,'metadata':None,'received_at':None,'summary_received_at':None,'metadata_received_at':None,'summary_source':None,'metadata_source':None,'observation_time':'unknown',
-                      'summary_supported':game['summary_supported'],'cloud_available':False,'achievements_available':False}
+                      'summary_supported':game['summary_supported'],'cloud_available':False,'achievements_available':self.achievements_available}
+                if 'achievements.read' in scopes:
+                    cached=db.execute('SELECT * FROM achievement_cache WHERE owner=? AND appid=?',(owner,game['appid'])).fetchone()
+                    status='not_requested';items=[];received=None
+                    if not self.achievements_available:status='not_configured'
+                    elif cached:
+                        status=cached['status'];received=cached['received_at']
+                        if cached['expires'] and cached['expires']<=time.time():
+                            status='expired'
+                            db.execute("UPDATE achievement_cache SET payload=NULL,status='expired' WHERE owner=? AND appid=?",(owner,game['appid']))
+                        elif status=='ok' and cached['payload']:items=json.loads(cached['payload'])
+                    item['achievements']={'status':status,'items':items,'received_at':received,'source':'steam_web_api'}
                 for kind,scope,model,key in [('save_summary','saves.summary',SaveSummary,'summary'),('save_metadata','saves.metadata',SaveMetadataSummary,'metadata')]:
                     if scope not in scopes or (kind=='save_summary' and game['appid']!=APPID):
                         continue
@@ -250,50 +293,6 @@ class Boundary:
         if scope['type'] != 'http':
             return await self.app(scope, receive, send)
         request = Request(scope)
-        if len(scope.get('query_string', b'')) > 8192:
-            return await JSONResponse({'error': 'query_too_large'}, 414)(scope, receive, send)
-        body = bytearray()
-        while True:
-            message = await receive()
-            if message['type'] == 'http.disconnect':
-                return
-            body.extend(message.get('body', b''))
-            if len(body) > 16384:
-                return await JSONResponse({'error': 'body_too_large'}, 413)(scope, receive, send)
-            if not message.get('more_body'):
-                break
-        path = scope['path']
-        if request.headers.get('origin') not in (None, self.config.issuer):
-            return await JSONResponse({'error': 'origin_denied'}, 403)(scope, receive, send)
-        if path in ('/authorize', '/token', '/register', '/login', '/steam/callback', '/v1/devices/pair/start', '/v1/devices/pair/poll', '/v1/device/observations'):
-            try:
-                self.store.limit('edge:' + path + ':' + digest(request.client.host if request.client else 'unknown'), 600 if path in ('/v1/devices/pair/poll','/v1/device/observations') else 60)
-            except HTTPException:
-                return await JSONResponse({'error': 'rate_limited'}, 429)(scope, receive, send)
-        if path == '/register':
-            try:
-                registration = json.loads(body)
-                redirects = registration.get('redirect_uris') if isinstance(registration, dict) else None
-                if not isinstance(redirects, list) or not redirects or any(not isinstance(u, str) or u not in self.config.redirect_uris for u in redirects):
-                    raise ValueError()
-            except (ValueError, TypeError):
-                return await JSONResponse({'error': 'invalid_client_metadata'}, 400)(scope, receive, send)
-        if path in ('/authorize', '/token'):
-            from urllib.parse import parse_qsl
-            try:
-                pairs = list(request.query_params.multi_items()) if request.method == 'GET' else parse_qsl(body.decode(), keep_blank_values=True, strict_parsing=True, max_num_fields=30)
-            except (ValueError, UnicodeError):
-                return await JSONResponse({'error': 'invalid_request'}, 400)(scope, receive, send)
-            params = dict(pairs)
-            if len(params) != len(pairs) or ('redirect_uri' in params and params['redirect_uri'] not in self.config.redirect_uris) or ('resource' in params and params['resource'] != self.config.issuer + '/mcp'):
-                return await JSONResponse({'error': 'invalid_request'}, 400)(scope, receive, send)
-        sent = False
-        async def replay():
-            nonlocal sent
-            if not sent:
-                sent = True
-                return {'type': 'http.request', 'body': bytes(body), 'more_body': False}
-            return await receive()
         async def secure(message):
             if message['type'] == 'http.response.start':
                 message['headers'] = [(k,v) for k,v in message['headers'] if k.lower() not in (b'access-control-allow-origin', b'cache-control')]
@@ -301,6 +300,53 @@ class Boundary:
                     (b'x-content-type-options', b'nosniff'), (b'content-security-policy', (b"default-src 'none'; style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'" + (b"; script-src 'self'; connect-src 'self'" if scope['path']=='/import' else b''))),
                     (b'strict-transport-security', b'max-age=31536000')]
             await send(message)
+        async def reject(data, status):
+            response=error_page(request,status) if wants_browser_error(request) else JSONResponse(data,status)
+            return await response(scope,receive,secure)
+        if len(scope.get('query_string', b'')) > 8192:
+            return await reject({'error': 'query_too_large'}, 414)
+        body = bytearray()
+        while True:
+            message = await receive()
+            if message['type'] == 'http.disconnect':
+                return
+            body.extend(message.get('body', b''))
+            if len(body) > 16384:
+                return await reject({'error': 'body_too_large'}, 413)
+            if not message.get('more_body'):
+                break
+        path = scope['path']
+        if request.headers.get('origin') not in (None, self.config.issuer):
+            return await reject({'error': 'origin_denied'}, 403)
+        if path in ('/authorize', '/token', '/register', '/login', '/steam/callback', '/v1/devices/pair/start', '/v1/devices/pair/poll', '/v1/device/observations'):
+            try:
+                self.store.limit('edge:' + path + ':' + digest(request.client.host if request.client else 'unknown'), 600 if path in ('/v1/devices/pair/poll','/v1/device/observations') else 60)
+            except HTTPException:
+                return await reject({'error': 'rate_limited'}, 429)
+        if path == '/register':
+            try:
+                registration = json.loads(body)
+                redirects = registration.get('redirect_uris') if isinstance(registration, dict) else None
+                if not isinstance(redirects, list) or not redirects or any(not isinstance(u, str) or u not in self.config.redirect_uris for u in redirects):
+                    raise ValueError()
+            except (ValueError, TypeError):
+                return await reject({'error': 'invalid_client_metadata'}, 400)
+        if path in ('/authorize', '/token'):
+            from urllib.parse import parse_qsl
+            try:
+                pairs = list(request.query_params.multi_items()) if request.method == 'GET' else parse_qsl(body.decode(), keep_blank_values=True, strict_parsing=True, max_num_fields=30)
+            except (ValueError, UnicodeError):
+                return await reject({'error': 'invalid_request'}, 400)
+            params = dict(pairs)
+            if len(params) != len(pairs) or ('redirect_uri' in params and params['redirect_uri'] not in self.config.redirect_uris) or ('resource' in params and params['resource'] != self.config.issuer + '/mcp'):
+                return await reject({'error': 'invalid_request'}, 400)
+        sent = False
+        async def replay():
+            nonlocal sent
+            if not sent:
+                sent = True
+                return {'type': 'http.request', 'body': bytes(body), 'more_body': False}
+            return await receive()
         return await self.app(scope, replay, secure)
 
 async def json_body(request):
@@ -331,11 +377,16 @@ async def form(request, session, issuer):
         raise HTTPException(403, 'Invalid CSRF token')
     return data
 
-def create_app(config=None, steam=None, database=None, download_dir=None):
+def create_app(config=None, steam=None, database=None, download_dir=None, achievement_reader=None, library_reader=None):
     config = config or Config.from_env()
     database = database or Database(config.db_path, database_url=config.database_url)
     store = Store(config.db_path, database=database)
     steam = steam or SteamService()
+    achievements = achievement_reader or AchievementReader()
+    store.achievements_available = achievements.configured
+    achievement_slots = threading.BoundedSemaphore(2)
+    libraries = library_reader or LibraryReader()
+    store.library_available = libraries.configured
     downloads = Path(download_dir) if download_dir is not None else Path(__file__).parent / 'downloads'
     archive = downloads / 'deck-companion.zip'
     checksum_path = downloads / 'deck-companion.zip.sha256'
@@ -402,9 +453,9 @@ def create_app(config=None, steam=None, database=None, download_dir=None):
             session = store.session(request, True)
         except HTTPException:
             requested=request.query_params.get('game')
-            if requested is not None and requested not in {str(i) for i in CURRENT_GAME_IDS}:
+            if requested is not None and requested not in {str(i) for i in DISCOVERY_TITLES}:
                 raise HTTPException(404,'Public game preset unavailable')
-            return page('Игровой спутник', ui.landing_body(selected_appid=int(requested) if requested else None))
+            return page('Игровой спутник', ui.landing_body(selected_appid=int(requested) if requested else None,discovery_catalog=discovery_catalog()))
         inbox = store.inbox(session['owner'])
         catalog = store.catalog(session['owner'])
         requested = request.query_params.get('game')
@@ -415,11 +466,11 @@ def create_app(config=None, steam=None, database=None, download_dir=None):
             raise HTTPException(400,'Invalid game') from None
         if requested is not None and focus not in selected_ids:
             raise HTTPException(404,'Selected game unavailable')
-        return page('Твоя игровая станция', ui.home_body(store.projection(session['owner']),session['csrf'],inbox,capabilities={'mcp_url':config.issuer+'/mcp','catalog':catalog,'catalog_revision':store.catalog_revision(session['owner'],catalog),'selected_appid':focus}))
+        return page('Твоя игровая станция', ui.home_body(store.projection(session['owner']),session['csrf'],inbox,capabilities={'mcp_url':config.issuer+'/mcp','discovery_catalog':discovery_catalog(store.achievements_available),'owned_library':store.library(session['owner']),'catalog':catalog,'catalog_revision':store.catalog_revision(session['owner'],catalog),'selected_appid':focus}))
 
     async def login(request):
         next_path = request.query_params.get('next', '/')
-        if next_path not in ('/', '/devices/approve') and not re.fullmatch(r'/oauth/consent\?request=[A-Za-z0-9_-]{43}', next_path):
+        if next_path not in ('/', '/devices/approve', '/import') and not re.fullmatch(r'/oauth/consent\?request=[A-Za-z0-9_-]{43}', next_path):
             raise HTTPException(400, 'Invalid continuation')
         raw, csrf, state = secrets.token_urlsafe(32), secrets.token_urlsafe(32), secrets.token_urlsafe(32)
         return_to = config.issuer + '/steam/callback?' + urlencode({'state': state})
@@ -534,7 +585,7 @@ def create_app(config=None, steam=None, database=None, download_dir=None):
         appid=parse_appid(str(data.get('appid','')))
         if any(data.get(scope) not in (None,'yes') for scope in SCOPES):
             raise HTTPException(422,'Explicit permissions required')
-        scopes=sorted(scope for scope in SCOPES if data.get(scope)=='yes')
+        scopes=sorted(scope for scope in ACCOUNT_SCOPES if data.get(scope)=='yes')
         user=str(data.get('user_code','')).upper()
         if not scopes or not re.fullmatch('[A-F0-9]{8}',user):
             raise HTTPException(400,'Invalid device code or permissions')
@@ -591,7 +642,8 @@ def create_app(config=None, steam=None, database=None, download_dir=None):
         return JSONResponse({'accepted':True,'duplicate':duplicate})
 
     async def manual_import_page(request):
-        session=store.session(request,True)
+        try:session=store.session(request,True)
+        except HTTPException:return RedirectResponse('/login?next=%2Fimport',303)
         permitted=any(game['appid']==APPID and game['selected'] and 'saves.summary' in game['authorized_scopes'] for game in store.catalog(session['owner']))
         return page('Ручной импорт',ui.manual_import_body(session['csrf'],permitted))
 
@@ -715,14 +767,96 @@ def create_app(config=None, steam=None, database=None, download_dir=None):
         if set(data)!={'csrf','appid','scope','enabled'} or data.get('enabled') not in ('yes','no'):
             raise HTTPException(422,'Explicit game and scope required')
         appid=parse_appid(data['appid']);scope=data['scope']
-        if scope not in SCOPES or (scope=='saves.summary' and appid!=APPID):
+        if scope not in ACCOUNT_SCOPES or (scope=='saves.summary' and appid!=APPID):
             raise HTTPException(422,'This interpretation capability is unavailable')
+        if scope=='achievements.read' and data['enabled']=='yes' and not achievements.configured:
+            raise HTTPException(503,'Operator achievement access is not configured')
         with store.db() as db:
             if not db.execute('SELECT 1 FROM game_selections WHERE owner=? AND appid=?',(session['owner'],appid)).fetchone():
                 raise HTTPException(403,'Select this game first')
-            if data['enabled']=='yes':db.execute('INSERT OR IGNORE INTO grants VALUES(?,?,?)',(session['owner'],appid,scope))
+            request.state.browser_return='/?game='+str(appid)+'#permissions'
+            if data['enabled']=='yes':
+                db.execute('INSERT OR IGNORE INTO grants VALUES(?,?,?)',(session['owner'],appid,scope))
+                if scope=='achievements.read':
+                    store.expire_achievements(db)
+                    if not db.execute('SELECT 1 FROM achievement_cache WHERE owner=? AND appid=?',(session['owner'],appid)).fetchone():
+                        if db.execute('SELECT count(*) FROM achievement_cache').fetchone()[0]>=ACHIEVEMENT_ROWS_GLOBAL or db.execute('SELECT count(*) FROM achievement_cache WHERE owner=?',(session['owner'],)).fetchone()[0]>=ACHIEVEMENT_ROWS_PER_OWNER:
+                            raise HTTPException(429,'Achievement cache capacity reached; revoke an unused achievement permission')
+                    db.execute('INSERT INTO achievement_cache(owner,appid,consent_id) VALUES(?,?,?) ON CONFLICT(owner,appid) DO NOTHING',(session['owner'],appid,secrets.token_urlsafe(32)))
             else:store.revoke_scope(db,session['owner'],appid,scope)
-        return RedirectResponse('/',303)
+        return RedirectResponse('/?game='+str(appid)+'#permissions',303)
+
+    async def library_permission(request):
+        session=store.session(request,True)
+        data=await form(request,session,config.issuer)
+        if set(data)!={'csrf','enabled'} or data['enabled'] not in ('yes','no'):raise HTTPException(422,'Explicit library choice required')
+        if data['enabled']=='yes' and not libraries.configured:raise HTTPException(503,'Operator library access is not configured')
+        with store.db() as db:
+            if data['enabled']=='no':db.execute('DELETE FROM library_cache WHERE owner=?',(session['owner'],))
+            else:
+                for row in db.execute('SELECT owner FROM library_cache WHERE expires<? AND payload IS NOT NULL LIMIT 100',(time.time(),)).fetchall():
+                    db.execute("UPDATE library_cache SET payload=NULL,status='expired' WHERE owner=?",(row['owner'],))
+                if not db.execute('SELECT 1 FROM library_cache WHERE owner=?',(session['owner'],)).fetchone() and db.execute('SELECT count(*) FROM library_cache').fetchone()[0]>=LIBRARY_ROWS_GLOBAL:raise HTTPException(429,'Library cache capacity reached')
+                db.execute('INSERT INTO library_cache(owner,consent_id) VALUES(?,?) ON CONFLICT(owner) DO NOTHING',(session['owner'],secrets.token_urlsafe(32)))
+        return RedirectResponse('/#steam-library',303)
+
+    async def refresh_library(request):
+        session=store.session(request,True)
+        data=await form(request,session,config.issuer)
+        if set(data)!={'csrf'}:raise HTTPException(422,'Only library refresh is accepted')
+        if not libraries.configured:raise HTTPException(503,'Operator library access is not configured')
+        owner=session['owner']
+        store.limit('library-owner:'+digest(owner),4,3600);store.limit('library-global',60,3600)
+        if not achievement_slots.acquire(blocking=False):raise HTTPException(429,'Steam reader busy')
+        try:
+            with store.db() as db:
+                row=db.execute('SELECT c.*,u.steamid FROM library_cache c JOIN users u ON u.id=c.owner WHERE c.owner=?',(owner,)).fetchone()
+                if not row:raise HTTPException(403,'Explicit library.read permission required')
+                now=time.time()
+                if row['attempted_at'] is not None and now-row['attempted_at']<900:raise HTTPException(429,'Refresh available after fifteen minutes')
+                nonce=secrets.token_urlsafe(32);epoch=row['consent_id'];steamid=row['steamid']
+                db.execute('UPDATE library_cache SET refresh_nonce=?,attempted_at=? WHERE owner=?',(nonce,now,owner))
+            try:result=await run_in_threadpool(libraries.get_games,steamid)
+            except Exception:result={'status':'unavailable','games':[]}
+            status=result['status'] if result.get('status') in ('ok','unavailable','not_configured') else 'unavailable'
+            payload=json.dumps(result['games'],ensure_ascii=False,separators=(',',':')) if status=='ok' else None
+            with store.db() as db:
+                if not db.execute('SELECT 1 FROM library_cache WHERE owner=? AND consent_id=? AND refresh_nonce=?',(owner,epoch,nonce)).fetchone():raise HTTPException(409,'Library permission changed during refresh')
+                now=time.time()
+                db.execute('UPDATE library_cache SET payload=?,status=?,received_at=?,expires=?,refresh_nonce=NULL WHERE owner=?',(payload,status,now,now+86400,owner))
+        finally:achievement_slots.release()
+        return RedirectResponse('/#steam-library',303)
+
+    async def refresh_achievements(request):
+        session=store.session(request,True)
+        data=await form(request,session,config.issuer)
+        if set(data)!={'csrf','appid'}:raise HTTPException(422,'Game required')
+        appid=parse_appid(data['appid']);owner=session['owner']
+        if not achievements.configured:raise HTTPException(503,'Operator achievement access is not configured')
+        store.limit('ach-owner:'+digest(owner),12,3600)
+        store.limit('ach-global',120,3600)
+        if not achievement_slots.acquire(blocking=False):raise HTTPException(429,'Achievement reader busy')
+        try:
+            with store.db() as db:
+                row=db.execute("SELECT c.*,u.steamid FROM achievement_cache c JOIN users u ON u.id=c.owner WHERE c.owner=? AND c.appid=? AND EXISTS(SELECT 1 FROM grants g WHERE g.owner=c.owner AND g.appid=c.appid AND g.scope='achievements.read') AND EXISTS(SELECT 1 FROM game_selections s WHERE s.owner=c.owner AND s.appid=c.appid)",(owner,appid)).fetchone()
+                if not row:raise HTTPException(403,'Current selected game and achievement permission required')
+                request.state.browser_return='/?game='+str(appid)+'#achievements'
+                store.expire_achievements(db)
+                now=time.time()
+                if row['attempted_at'] is not None and now-row['attempted_at']<900:raise HTTPException(429,'Refresh available after fifteen minutes')
+                nonce=secrets.token_urlsafe(32);epoch=row['consent_id'];steamid=row['steamid']
+                db.execute('UPDATE achievement_cache SET refresh_nonce=?,attempted_at=? WHERE owner=? AND appid=?',(nonce,now,owner,appid))
+            try:result=await run_in_threadpool(achievements.get_unlocked,steamid,appid)
+            except Exception:result={'status':'unavailable','achievements':[]}
+            status=result['status'] if result.get('status') in ('ok','unavailable','not_configured') else 'unavailable'
+            payload=json.dumps(result['achievements'],ensure_ascii=False,separators=(',',':')) if status=='ok' else None
+            with store.db() as db:
+                row=db.execute("SELECT 1 FROM achievement_cache c WHERE owner=? AND appid=? AND consent_id=? AND refresh_nonce=? AND EXISTS(SELECT 1 FROM grants g WHERE g.owner=c.owner AND g.appid=c.appid AND g.scope='achievements.read') AND EXISTS(SELECT 1 FROM game_selections s WHERE s.owner=c.owner AND s.appid=c.appid)",(owner,appid,epoch,nonce)).fetchone()
+                if not row:raise HTTPException(409,'Achievement permission changed during refresh')
+                now=time.time()
+                db.execute('UPDATE achievement_cache SET payload=?,status=?,received_at=?,expires=?,refresh_nonce=NULL WHERE owner=? AND appid=?',(payload,status,now,now+86400,owner,appid))
+        finally:achievement_slots.release()
+        return RedirectResponse('/?game='+str(appid)+'#achievements',303)
 
     async def revoke_selected_game(request):
         session=store.session(request,True)
@@ -753,7 +887,8 @@ def create_app(config=None, steam=None, database=None, download_dir=None):
                     (session['owner'],APPID,int(enabled),row['payload'] if row else None,epoch,time.time()))
             if not enabled:
                 db.execute('DELETE FROM notifications WHERE owner=? AND appid=?',(session['owner'],APPID))
-        return RedirectResponse('/',303)
+            selected=db.execute('SELECT 1 FROM game_selections WHERE owner=? AND appid=?',(session['owner'],APPID)).fetchone()
+        return RedirectResponse('/?game='+str(APPID)+'#updates' if selected else '/#library',303)
 
     async def notification_read(request):
         session = store.session(request,True)
@@ -771,13 +906,13 @@ def create_app(config=None, steam=None, database=None, download_dir=None):
                 (time.time(),data['notification_id'],session['owner'],time.time()-INBOX_TTL,session['owner'],'saves.summary')).fetchone()
             if not row:
                 raise HTTPException(404,'Notification unavailable')
-        return RedirectResponse('/',303)
+        return RedirectResponse('/?game='+str(APPID)+'#updates',303)
 
     async def revoke(request):
         session=store.session(request,True)
         await form(request,session,config.issuer)
         with store.db() as db:
-            for table in ('grants','devices','observations','events','notification_settings','notifications','game_selections','observations_v2'):
+            for table in ('grants','devices','observations','events','notification_settings','notifications','game_selections','observations_v2','achievement_cache','library_cache'):
                 db.execute(f'DELETE FROM {table} WHERE owner=?',(session['owner'],))
             db.execute('DELETE FROM pairings WHERE owner=?',(session['owner'],))
             provider.revoke_subject(session['owner'], connection=db)
@@ -798,11 +933,12 @@ def create_app(config=None, steam=None, database=None, download_dir=None):
         return JSONResponse(data)
 
     app=mcp.streamable_http_app()
+    app.add_exception_handler(HTTPException,browser_http_exception)
     app.routes.insert(0,Route('/.well-known/oauth-authorization-server',metadata))
     app.routes.extend([Route('/import',manual_import_page),Route('/assets/import.js',import_script),Route('/assets/belmont-parser.js',parser_script),Route('/v1/browser/observations',manual_import,methods=['POST']),Route('/assets/console.css',stylesheet),Route('/setup',setup_page),Route('/downloads/deck-companion.zip',download),Route('/downloads/deck-companion.zip.sha256',download_checksum),Route('/healthz',health),Route('/',home),Route('/login',login),Route('/steam/callback',callback),
         Route('/v1/devices/pair/start',pair_start,methods=['POST']),Route('/v1/devices/pair/poll',pair_poll,methods=['POST']),
         Route('/devices/approve',approve_device,methods=['GET','POST']),Route('/v1/device/observations',ingest,methods=['POST']),
-        Route('/oauth/consent',consent,methods=['GET','POST']),Route('/account/games/add',add_game,methods=['POST']),Route('/account/games',choose_games,methods=['POST']),Route('/account/games/permissions',game_permission,methods=['POST']),Route('/account/games/revoke',revoke_selected_game,methods=['POST']),Route('/account/notifications',notification_settings,methods=['POST']),Route('/account/notifications/read',notification_read,methods=['POST']),Route('/account/revoke',revoke,methods=['POST']),Route('/logout',logout,methods=['POST'])])
+        Route('/oauth/consent',consent,methods=['GET','POST']),Route('/account/library/permission',library_permission,methods=['POST']),Route('/account/library/refresh',refresh_library,methods=['POST']),Route('/account/achievements/refresh',refresh_achievements,methods=['POST']),Route('/account/games/add',add_game,methods=['POST']),Route('/account/games',choose_games,methods=['POST']),Route('/account/games/permissions',game_permission,methods=['POST']),Route('/account/games/revoke',revoke_selected_game,methods=['POST']),Route('/account/notifications',notification_settings,methods=['POST']),Route('/account/notifications/read',notification_read,methods=['POST']),Route('/account/revoke',revoke,methods=['POST']),Route('/logout',logout,methods=['POST'])])
     app.add_middleware(Boundary,config=config,store=store)
     app.add_middleware(TrustedHostMiddleware,allowed_hosts=[urlsplit(config.issuer).hostname])
     app.state.store,app.state.provider,app.state.config=store,provider,config

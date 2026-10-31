@@ -96,7 +96,7 @@ class ManualImportTests(unittest.TestCase):
             self.assertEqual(db.execute('SELECT count(*) FROM observations_v2').fetchone()[0],0)
 
     def test_import_routes_are_authenticated_and_scripts_are_scoped(self):
-        self.assertEqual(self.client.get('/import').status_code,401)
+        self.assertEqual(self.client.get('/import').status_code,303)
         self.sign_in()
         blocked=self.client.get('/import');self.assertEqual(blocked.status_code,200)
         self.choose([4231820],summary=True)

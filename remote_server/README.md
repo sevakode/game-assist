@@ -259,3 +259,123 @@ was saved. Event retries are idempotent in an owner-bound manual channel, and a
 changed payload with the same event ID is rejected. Existing opt-in site inbox
 rules apply to the two known raw fragment counters only; identical projections do
 not alert. Revocation deletes scoped manual/device data and blocks both sources.
+
+### ACH-01: optional operator-configured achievements
+
+`SGC_STEAM_API_KEY` is an optional operator secret, never requested from players or
+stored in application tables. Without it the capability is unavailable and no
+achievement HTTP requests occur. Configuration alone grants nobody access.
+A selected game's `achievements.read` permission is a separate explicit opt-in;
+changing save permissions does not enable it. Any registered AppID can be requested,
+but Steam may expose no usable data. This is not proof of ownership or Cloud access.
+
+`POST /account/achievements/refresh` accepts exactly `csrf,appid` with authenticated
+session and exact Origin. Refresh is manual/request-driven: there is no scheduled
+worker, automatic refresh on MCP reads, or push. At most two calls run concurrently;
+minimum refresh interval is fifteen minutes/game, with twelve attempts/hour/account
+and 120/hour globally. Responses are bounded to 1 MiB, 10,000 input rows, 500 unlocked
+rows and 128 KiB retained data per game. Cache expires after 24 hours and expired
+payload is removed on access; unavailable/private responses clear earlier payload.
+There is at most one cache row per permitted game, capped at20 per account and512
+globally (at most64MiB payload capacity). Granting beyond capacity fails before any
+Steam call; revoke unused achievement permissions to free slots. Expired payloads
+are also cleared in batches of100 during grants/refreshes. No automatic paid scale.
+
+Only exact `achieved=1` rows survive response validation. Locked names/identifiers,
+descriptions, totals, percentages and raw response bytes are never retained. Public
+projections contain unlocked fields only, fixed `steam_web_api` provenance and server
+receipt time. An empty successful list is not proof of game completion or missing
+progress; unavailable/expired is explicitly unknown, not zero achievements.
+Returned SteamID must exactly match the signed-in account's stored identity. If the
+response includes numeric AppID it must match; when absent, game binding is the
+fixed request AppID, not an invented response identity inferred from gameName.
+Live provider compatibility is not established by synthetic tests.
+
+Requests use the fixed HTTPS public Steam API endpoint, `x-webapi-key` header,
+no redirects or environment proxy, bounded timeout/body, and narrowly scoped
+httpx/httpcore log redaction. Unrelated security logs remain intact. Provider keys,
+SteamID queries and raw provider errors are never sent to UI/MCP or transport logs.
+No GetSchemaForGame catalog is downloaded or bundled. Game text is runtime provider
+data, not licensed as part of this repository's MIT source.
+
+The additive `achievement_cache` table has a server-generated consent generation
+and refresh nonce. External I/O runs outside the DB transaction; the result is
+committed only if both still match current selection and grant. Revoke/regrant
+therefore cannot resurrect an older in-flight result. Scope/game/all-access revoke
+removes the cache immediately. Device pairing never accepts achievement scope.
+
+### Curated game discovery (identity only)
+
+The static discovery list is a small editorial selection, not a live popularity
+ranking or the user’s owned Steam library. AppIDs and titles were checked on the
+official Steam store on 2026-10-31 (some titles are shown with normalized typography
+and without trademark symbols/edition marketing suffixes). No store descriptions,
+artwork, screenshots, reviews, achievement catalogues or save data are bundled.
+No HTTP lookup is performed while rendering.
+
+Discovery does not add games to an account: the player explicitly adds one, then
+reviews selection and separate permissions. “All current” still means only that
+account’s current presets/registered games; a future discovery entry never expands
+selection or consent. Only Belmont currently has the reviewed four-scalar parser.
+Other entries offer optional local-file metadata, not interpreted progression.
+Steam Cloud is unavailable; achievements remain operator-configured and opt-in.
+
+Verified identity sources:
+
+- [Castlevania: Belmont’s Curse](https://store.steampowered.com/app/4231820/) — `4231820`.
+- [Elden Ring](https://store.steampowered.com/app/1245620/) — `1245620`.
+- [The Witcher 3: Wild Hunt](https://store.steampowered.com/app/292030/) — `292030`.
+- [Baldur's Gate 3](https://store.steampowered.com/app/1086940/) — `1086940`.
+- [Cyberpunk 2077](https://store.steampowered.com/app/1091500/) — `1091500`.
+- [Red Dead Redemption 2](https://store.steampowered.com/app/1174180/) — `1174180`.
+- [The Elder Scrolls V: Skyrim Special Edition](https://store.steampowered.com/app/489830/) — `489830`.
+- [Fallout 4](https://store.steampowered.com/app/377160/) — `377160`.
+- [Stardew Valley](https://store.steampowered.com/app/413150/) — `413150`.
+- [Terraria](https://store.steampowered.com/app/105600/) — `105600`.
+- [Hollow Knight](https://store.steampowered.com/app/367520/) — `367520`.
+- [Hades](https://store.steampowered.com/app/1145360/) — `1145360`.
+- [Subnautica](https://store.steampowered.com/app/264710/) — `264710`.
+- [Kingdom Come: Deliverance II](https://store.steampowered.com/app/1771300/) — `1771300`.
+- [Monster Hunter Wilds](https://store.steampowered.com/app/2246340/) — `2246340`.
+- [Sekiro: Shadows Die Twice - GOTY Edition](https://store.steampowered.com/app/814380/) — `814380`.
+- [DARK SOULS III](https://store.steampowered.com/app/374320/) — `374320`.
+
+### Optional owned-Steam-library discovery
+
+This separate **account-level `library.read` opt-in** is represented by an enabled
+`library_cache` consent row; it is not a per-game data grant. Operator API access
+must be configured first; players never provide keys. Exact POST forms:
+`/account/library/permission` takes `csrf,enabled=yes|no`, and
+`/account/library/refresh` takes only `csrf`. Both require the existing site session
+and exact Origin. Nothing is fetched on login, page load, MCP reads or consent alone.
+The owner/SteamID is derived exclusively from the authenticated session.
+
+The fixed public HTTPS `IPlayerService/GetOwnedGames/v1/` request uses the operator
+key header and `input_json` with SteamID, `include_appinfo=true` and
+`include_played_free_games=true`. Only bounded AppID/name pairs survive; playtime,
+icons and other profile fields are discarded. The provider response may omit
+identity, so provenance is request-bound; any returned SteamID must match. This
+is not an independently verified current license entitlement. Empty/missing/private
+responses—including an empty reported list—are conservatively **unavailable/unknown**,
+never a claim that the account owns zero games. Games must be visible to the API.
+[Official method documentation](https://partner.steamgames.com/doc/webapi/IPlayerService#GetOwnedGames).
+
+No library result is automatically registered, selected or granted save/achievement
+access. The user explicitly adds individual games and then uses the existing
+selection/review flow. The cached personal library is shown on the account website,
+not added to MCP progress responses. Curated discovery is a separate public list.
+
+Storage is capped at128 consent/cache rows globally, one per account, with at most
+256KiB retained AppID/name JSON per row (32MiB total payload ceiling, excluding DB
+metadata/overhead). Responses are limited to1MiB,1000 games and120-character names;
+exceeding limits produces unavailable, not a misleading truncated library. Cache
+expires after24h; expired payload is cleared on access and bounded100-row batches
+when consent is enabled. Refresh cooldown is15minutes, limited to4 attempts/hour
+per account and60/hour globally. Achievement/library calls share two in-flight slots.
+No scheduler, paid scaling or new infrastructure is required.
+
+External I/O runs outside database transactions. Consent generation and refresh
+nonce must still match before storing results; disable/re-enable cannot resurrect
+an older response. Disabling library access or revoking all account access deletes
+this cache immediately. Live access still requires separately authorized secure
+operator-key configuration; all implementation tests use synthetic transports.
