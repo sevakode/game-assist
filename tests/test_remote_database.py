@@ -19,7 +19,7 @@ class DatabaseTests(unittest.TestCase):
             self.assertEqual(path.parent.stat().st_mode & 0o777, 0o700)
             with db.transaction() as connection:
                 count=connection.execute("SELECT count(*) FROM sqlite_master WHERE type='table'").fetchone()
-                self.assertEqual(count[0],16)
+                self.assertEqual(count[0],20)
                 connection.execute('INSERT INTO users VALUES(?,?)',('user','76561198000000000'))
                 row=connection.execute('SELECT id,steamid FROM users').fetchone()
                 self.assertEqual(row[0],row['id'])
@@ -100,6 +100,7 @@ class ConnectionDiagnosticTests(unittest.TestCase):
         raw=Mock()
         raw.execute.return_value.description=[('server_encoding',)]
         raw.execute.return_value.fetchone.return_value=('UTF8',)
+        raw.execute.return_value.fetchall.return_value=[]
         return raw
 
     def postgres(self):

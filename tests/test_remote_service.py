@@ -99,8 +99,9 @@ class RemoteTests(unittest.TestCase):
 
     def test_pair_expiration_replay_rate_grants(self):
         self.sign_in()
-        token=self.pair(scope='saves.metadata')
-        self.assertEqual(self.client.post('/v1/device/observations',json=self.observation(),headers={'authorization':'Bearer '+token}).status_code,403)
+        unavailable=self.client.post('/v1/devices/pair/start',json={}).json()
+        denied=self.client.post('/devices/approve',data={'csrf':self.csrf(),'user_code':unavailable['user_code'],'appid':'4231820','saves.metadata':'yes'},headers={'origin':ORIGIN})
+        self.assertEqual(denied.status_code,422)
         pair=self.client.post('/v1/devices/pair/start',json={}).json()
         self.assertEqual(self.client.post('/v1/devices/pair/poll',json={'device_code':pair['device_code']}).json()['status'],'pending')
         self.assertEqual(self.client.post('/v1/devices/pair/poll',json={'device_code':pair['device_code']}).status_code,429)

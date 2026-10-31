@@ -38,3 +38,4 @@ jobs:
       - run: node --check web/app.js
       - run: node web/tests/check-ui.cjs
       - run: python -m knowledge knowledge/catalog.json
+      - run: python -m knowledge.profiles knowledge/game_profiles.json

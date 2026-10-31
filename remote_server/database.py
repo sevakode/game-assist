@@ -14,7 +14,7 @@ import sqlite3
 import threading
 from urllib.parse import parse_qsl, urlsplit
 
-from .schema import SCHEMA
+from .schema import SCHEMA, migrate
 
 # Bound simultaneous connections even without a pool dependency. PostgreSQL
 # connections close at transaction exit; no session locks survive pool handoff.
@@ -275,6 +275,7 @@ class Database:
                         if self.backend == 'postgres' and connection.execute('SHOW server_encoding').fetchone()[0] != 'UTF8':
                             raise ValueError('PostgreSQL database must use UTF8 encoding')
                         connection.executescript(SCHEMA[self.backend])
+                        migrate(connection,self.backend)
                     self._initialized = True
                     return
                 except ConnectionUnavailable as error:

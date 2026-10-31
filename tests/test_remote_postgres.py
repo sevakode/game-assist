@@ -22,7 +22,7 @@ import test_remote_oauth as oauth_tests
 import test_remote_service as service_tests
 
 DSN=os.environ.get('GA_TEST_POSTGRES_URL')
-TABLES='notification_settings,notifications,users,sessions,login_states,grants,pairings,devices,observations,events,limits,steam_nonces,oauth_clients,oauth_pending,oauth_codes,oauth_tokens'
+TABLES='schema_migrations,game_registrations,observations_v2,game_selections,notification_settings,notifications,users,sessions,login_states,grants,pairings,devices,observations,events,limits,steam_nonces,oauth_clients,oauth_pending,oauth_codes,oauth_tokens'
 
 
 def database():
@@ -113,7 +113,7 @@ class PostgresServiceTests(service_tests.RemoteTests):
         with ThreadPoolExecutor(2) as pool:
             a=pool.submit(ingest,0); b=pool.submit(revoke); a.result(); self.assertEqual(b.result().status_code,303)
         with self.database.transaction() as db:
-            self.assertEqual(db.execute('SELECT count(*) FROM observations').fetchone()[0],0)
+            self.assertEqual(db.execute('SELECT count(*) FROM observations_v2').fetchone()[0],0)
             self.assertEqual(db.execute('SELECT count(*) FROM devices').fetchone()[0],0)
 
     def test_steam_nonce_survives_restart(self):
@@ -132,4 +132,16 @@ import test_remote_inbox as inbox_tests
 
 @unittest.skipUnless(DSN, 'Real local PostgreSQL DSN not supplied')
 class PostgresInboxTests(inbox_tests.InboxTests):
+    setUp=PostgresServiceTests.setUp
+
+import test_remote_games as game_tests
+
+@unittest.skipUnless(DSN, 'Real local PostgreSQL DSN not supplied')
+class PostgresGameSelectionTests(game_tests.GameSelectionTests):
+    setUp=PostgresServiceTests.setUp
+
+import test_remote_universal as universal_tests
+
+@unittest.skipUnless(DSN, 'Real local PostgreSQL DSN not supplied')
+class PostgresUniversalGameTests(universal_tests.UniversalGameTests):
     setUp=PostgresServiceTests.setUp

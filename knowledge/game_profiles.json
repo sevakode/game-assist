@@ -1,0 +1,190 @@
+{
+  "schema_version": "1.0",
+  "profiles": [
+    {
+      "appid": 4231820,
+      "title": "Castlevania: Belmont's Curse",
+      "registry_status": "approved",
+      "registry_reviewer": "local profile schema review 2026-10-31",
+      "parser_auto_enable": false,
+      "sources": [
+        {
+          "id": "steam-identity",
+          "url": "https://store.steampowered.com/app/4231820/",
+          "attribution": "Valve Steam store; identity reference only, not parser evidence"
+        }
+      ],
+      "rights": {
+        "contributor": "Game Assist local implementation",
+        "basis": "original",
+        "license": "MIT (original manifest text only; no third-party game data licensed)"
+      },
+      "evidence": [
+        {
+          "id": "local-reader-review",
+          "kind": "source_review",
+          "reference": "decoders/belmont.py",
+          "summary": "Local read-only reader allowlists four scalar names for JSON save format 1.1.3. These are not maxima or identified pickups."
+        },
+        {
+          "id": "local-reader-tests",
+          "kind": "synthetic_test",
+          "reference": "tests/test_belmont.py",
+          "summary": "Synthetic structural reader tests; no real saves included."
+        },
+        {
+          "id": "consented-fixture-report",
+          "kind": "private_fixture_report",
+          "reference": "docs/PARSER_COVERAGE.md#subsequent-private-fixture-evidence-2026-10-31",
+          "summary": "Owner-authorized read-only inspection reported format 1.1.3 and four scalar fields. Exact game build and pickup semantics remain unknown. No private values or save bytes in registry."
+        }
+      ],
+      "coverage": [
+        {
+          "capability": "resource_scalars",
+          "status": "verified",
+          "game_version": null,
+          "save_format_version": "1.1.3",
+          "parser_id": "belmont-structural",
+          "parser_revision": "sha256:abe462e193421953e4a3866b5966ca2f57b03a9fd1719003b1ecdcb868ffc0ce",
+          "scalar_fields": [
+            "healthUpgradeFragmentCount",
+            "manaUpgradeFragmentCount",
+            "currentHealth",
+            "currentMana"
+          ],
+          "evidence_ids": [
+            "local-reader-review",
+            "local-reader-tests",
+            "consented-fixture-report"
+          ],
+          "reviewer": "local source and evidence-report review 2026-10-31"
+        },
+        {
+          "capability": "hp_pickups",
+          "status": "unknown"
+        },
+        {
+          "capability": "mana_pickups",
+          "status": "unknown"
+        },
+        {
+          "capability": "inventory",
+          "status": "unknown"
+        },
+        {
+          "capability": "quests",
+          "status": "unknown"
+        },
+        {
+          "capability": "bosses",
+          "status": "unknown"
+        },
+        {
+          "capability": "missables",
+          "status": "unknown"
+        }
+      ]
+    },
+    {
+      "appid": 1245620,
+      "title": "ELDEN RING",
+      "registry_status": "approved",
+      "registry_reviewer": "local profile schema review 2026-10-31",
+      "parser_auto_enable": false,
+      "sources": [
+        {
+          "id": "steam-identity",
+          "url": "https://store.steampowered.com/app/1245620/",
+          "attribution": "Valve Steam store; identity reference only, not parser evidence"
+        }
+      ],
+      "rights": {
+        "contributor": "Game Assist local implementation",
+        "basis": "original",
+        "license": "MIT (original manifest text only; no third-party game data licensed)"
+      },
+      "evidence": [],
+      "coverage": [
+        {
+          "capability": "resource_scalars",
+          "status": "unknown"
+        },
+        {
+          "capability": "hp_pickups",
+          "status": "unknown"
+        },
+        {
+          "capability": "mana_pickups",
+          "status": "unknown"
+        },
+        {
+          "capability": "inventory",
+          "status": "unknown"
+        },
+        {
+          "capability": "quests",
+          "status": "unknown"
+        },
+        {
+          "capability": "bosses",
+          "status": "unknown"
+        },
+        {
+          "capability": "missables",
+          "status": "unknown"
+        }
+      ]
+    },
+    {
+      "appid": 292030,
+      "title": "The Witcher 3: Wild Hunt",
+      "registry_status": "approved",
+      "registry_reviewer": "local profile schema review 2026-10-31",
+      "parser_auto_enable": false,
+      "sources": [
+        {
+          "id": "steam-identity",
+          "url": "https://store.steampowered.com/app/292030/",
+          "attribution": "Valve Steam store; identity reference only, not parser evidence"
+        }
+      ],
+      "rights": {
+        "contributor": "Game Assist local implementation",
+        "basis": "original",
+        "license": "MIT (original manifest text only; no third-party game data licensed)"
+      },
+      "evidence": [],
+      "coverage": [
+        {
+          "capability": "resource_scalars",
+          "status": "unknown"
+        },
+        {
+          "capability": "hp_pickups",
+          "status": "unknown"
+        },
+        {
+          "capability": "mana_pickups",
+          "status": "unknown"
+        },
+        {
+          "capability": "inventory",
+          "status": "unknown"
+        },
+        {
+          "capability": "quests",
+          "status": "unknown"
+        },
+        {
+          "capability": "bosses",
+          "status": "unknown"
+        },
+        {
+          "capability": "missables",
+          "status": "unknown"
+        }
+      ]
+    }
+  ]
+}

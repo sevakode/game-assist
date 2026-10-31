@@ -1,4 +1,4 @@
-"""Opt-in Linux/Steam Deck summary uploader; standard library only."""
+"""Read-only selected-game companion: minimal metadata or explicit Belmont summary."""
 import argparse
 from contextlib import contextmanager
 import fcntl
@@ -19,6 +19,9 @@ from agent import watch
 from decoders import belmont
 
 LIMIT = 16384
+MAX_APPID = 2147483647
+MAX_METADATA_BYTES = 1024 ** 3
+MODES = ('metadata', 'belmont-summary')
 DEFAULT_HOME = Path.home() / '.config' / 'steam-game-companion'
 
 
@@ -127,11 +130,28 @@ class Store:
             tmp.unlink(missing_ok=True)
 
 
-def signature(path):
+def selection(appid, mode):
+    if type(appid) is not int or not 1 <= appid <= MAX_APPID:
+        raise ValueError('Steam AppID must be 1..2147483647')
+    if mode not in MODES or (mode == 'belmont-summary' and appid != 4231820):
+        raise ValueError('Summary decoder is available only for Belmont app 4231820; choose metadata for other games')
+    return 'saves.metadata' if mode == 'metadata' else 'saves.summary'
+
+
+def clean_metadata(value):
+    if not isinstance(value, dict) or set(value) != {'size_bytes', 'modified_ns'}:
+        raise ValueError('Invalid minimal metadata')
+    for key, limit in (('size_bytes', MAX_METADATA_BYTES), ('modified_ns', 2**63 - 1)):
+        if type(value[key]) is not int or not 0 <= value[key] <= limit:
+            raise ValueError('Invalid minimal metadata value')
+    return dict(value)
+
+
+def signature(path, max_bytes=belmont.MAX_BYTES):
     fd, _ = watch._open_root(path)
     try:
         st = os.fstat(fd)
-        if not stat.S_ISREG(st.st_mode) or st.st_size > belmont.MAX_BYTES:
+        if not stat.S_ISREG(st.st_mode) or st.st_size > max_bytes:
             raise watch.SnapshotError('Select one bounded regular save file')
         return list(watch._signature(st))
     finally:
@@ -165,9 +185,23 @@ def clean_summary(value):
     return clean
 
 
-def pair(store, transport, path, sleep=time.sleep, monotonic=time.monotonic):
-    signature(path)  # Explicit selection is mandatory; never discover or traverse home.
-    start = transport.post('/v1/devices/pair/start', {})
+def pair(store, transport, path, sleep=time.sleep, monotonic=time.monotonic, *, appid=4231820, mode='belmont-summary', ask=input):
+    scope = selection(appid, mode)
+    previous = store.read('config.json')
+    previous_generation = previous.get('pairing_id')
+    if previous:
+        print('Only one selected game/file is watched by this installation. Existing pairing and queued observations will be replaced, not combined.')
+        if ask('Replace the existing pairing? [y/N] ').strip().lower() not in ('y', 'yes'):
+            raise ValueError('Replacement not approved')
+    signature(path, MAX_METADATA_BYTES if mode == 'metadata' else belmont.MAX_BYTES)  # Explicit selection is mandatory; never discover or traverse home.
+    print(f'Steam AppID: {appid}; mode: {mode}.')
+    print('The game/file association is your selection, not proof that the file belongs to this game. Only this one file will be watched.')
+    if mode == 'metadata':
+        print('Локальный файл — только чтение; передаются только размер и время изменения. Содержимое не читается и не передаётся; прогресс игры неизвестен. Декодер не требуется.')
+    else:
+        print('Локальный файл — только чтение; передаются только четыре поля Belmont 1.1.3 и ограничения декодера, не содержимое сейва.')
+    print('Approve this same game and scope on your phone. Add an unknown game to your service catalogue first.')
+    start = transport.post('/v1/devices/pair/start', {'appid': appid, 'scopes': [scope]})
     uri = start['verification_uri']
     parsed = urllib.parse.urlsplit(uri)
     if server_origin(urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, '', '', '')),
@@ -179,7 +213,7 @@ def pair(store, transport, path, sleep=time.sleep, monotonic=time.monotonic):
     # Print only a short-lived code and verification page, never the device code/token.
     print('Open on your phone: ' + uri)
     print('Pairing code: ' + code)
-    print('Sign in through Steam and explicitly approve this device and save-summary scope.')
+    print('Sign in through Steam and explicitly approve this device, selected game and ' + scope + ' scope.')
     lifetime = min(600, max(1, int(start['expires_in'])))
     interval = min(60, max(5, int(start.get('interval', 5))))
     until = monotonic() + lifetime
@@ -194,10 +228,14 @@ def pair(store, transport, path, sleep=time.sleep, monotonic=time.monotonic):
         token = result.get('device_token')
         if result.get('status') != 'approved' or not isinstance(token, str) or not token or len(token) > 4096 or any(c.isspace() for c in token):
             raise ValueError('Pairing denied or expired')
+        if type(result.get('appid')) is not int or result['appid'] != appid or result.get('scopes') != [scope]:
+            raise ValueError('Approved game/scope does not match requested selection')
         generation = uuid.uuid4().hex
         with store.lock():
-            store.write('config.json', {'server': transport.origin, 'path': os.path.abspath(os.path.expanduser(path)), 'device_token': token, 'pairing_id': generation, 'expires_at': time.time() + min(2592000, max(1, int(result.get('expires_in', 2592000))))})
-            store.write('state.json', {'pairing_id': generation})
+            if store.read('config.json').get('pairing_id') != previous_generation:
+                raise ValueError('Another pairing changed; repeat explicit replacement')
+            store.write('config.json', {'server': transport.origin, 'path': os.path.abspath(os.path.expanduser(path)), 'device_token': token, 'pairing_id': generation, 'appid': appid, 'mode': mode, 'expires_at': time.time() + min(2592000, max(1, int(result.get('expires_in', 2592000))))})
+            store.write('state.json', {'pairing_id': generation, 'appid': appid, 'mode': mode})
         # Generation binding rejects old queues even if interrupted between writes.
         print('Device paired. Private credential saved; no raw save data will be uploaded.')
         return
@@ -211,9 +249,15 @@ class RePairRequired(Exception):
 class Runner:
     def __init__(self, store, transport, config, now=time.time):
         self.store, self.transport, self.config, self.now = store, transport, config, now
+        self.appid = config.get('appid', 4231820)
+        self.mode = config.get('mode', 'belmont-summary')
+        selection(self.appid, self.mode)
+        self.kind = 'save_metadata' if self.mode == 'metadata' else 'save_summary'
         self.state = store.read('state.json')
-        if self.state.get('pairing_id') != config.get('pairing_id'):
-            self.state = {'pairing_id': config.get('pairing_id')}
+        if (self.state.get('pairing_id') != config.get('pairing_id')
+                or self.state.get('appid', 4231820) != self.appid
+                or self.state.get('mode', 'belmont-summary') != self.mode):
+            self.state = {'pairing_id': config.get('pairing_id'), 'appid': self.appid, 'mode': self.mode}
         self.candidate = None
         self.delay = 60
         self.failures = 0
@@ -225,7 +269,9 @@ class Runner:
         with self.store.lock():
             if self.config.get('pairing_id') is not None:
                 current_config = self.store.read('config.json')
-                if current_config.get('pairing_id') != self.config['pairing_id']:
+                if (current_config.get('pairing_id') != self.config['pairing_id']
+                        or current_config.get('appid', 4231820) != self.appid
+                        or current_config.get('mode', 'belmont-summary') != self.mode):
                     raise RePairRequired()
             return self._tick_locked()
 
@@ -234,17 +280,28 @@ class Runner:
             self.state['sync_status'] = 'pairing_or_consent_required'
             self.store.write('state.json', self.state)
             raise RePairRequired()
-        current = signature(self.config['path'])
+        byte_limit = MAX_METADATA_BYTES if self.mode == 'metadata' else belmont.MAX_BYTES
+        current = signature(self.config['path'], byte_limit)
         if current != self.state.get('signature'):
             if current == self.candidate:
-                records = watch.snapshot([self.config['path']], single_file_only=True)
-                summary = clean_summary(watch.belmont_summary(self.config['path'], records))
-                if current != signature(self.config['path']):
+                if self.mode == 'metadata':
+                    summary = clean_metadata({'size_bytes': current[3], 'modified_ns': current[4]})
+                    self.state['observation_status'] = 'metadata_only_contents_and_progress_unknown'
+                else:
+                    records = watch.snapshot([self.config['path']], single_file_only=True)
+                    try:
+                        summary = clean_summary(watch.belmont_summary(self.config['path'], records))
+                    except watch.SnapshotError:
+                        self.state['observation_status'] = 'unsupported_or_invalid_or_unstable_summary_format'
+                        self.store.write('state.json', self.state)
+                        raise
+                    self.state['observation_status'] = 'belmont_four_raw_fields_only'
+                if current != signature(self.config['path'], byte_limit):
                     raise watch.SnapshotError('Save changed during observation')
                 digest = hashlib.sha256(json.dumps(summary, sort_keys=True).encode()).hexdigest()
                 if digest != self.state.get('summary_digest'):
-                    self.state['queue'] = {'event_id': str(uuid.uuid4()), 'appid': 4231820,
-                                           'kind': 'save_summary', 'payload': summary}
+                    self.state['queue'] = {'event_id': str(uuid.uuid4()), 'appid': self.appid,
+                                           'kind': self.kind, 'payload': summary}
                     self.state['summary_digest'] = digest
                 self.state['signature'] = current
                 self.state['observed_at'] = self.now()
@@ -257,8 +314,10 @@ class Runner:
         if queued and self.now() >= self.retry_at:
             # Rebuild envelope so arbitrary state-file content cannot be uploaded.
             event = str(uuid.UUID(queued['event_id']))
-            envelope = {'event_id': event, 'appid': 4231820, 'kind': 'save_summary',
-                        'payload': clean_summary(queued['payload'])}
+            if queued.get('appid') != self.appid or queued.get('kind') != self.kind:
+                raise ValueError('Queued game/mode does not match pairing')
+            envelope = {'event_id': event, 'appid': self.appid, 'kind': self.kind,
+                        'payload': (clean_metadata if self.mode == 'metadata' else clean_summary)(queued['payload'])}
             try:
                 result = self.transport.post('/v1/device/observations', envelope, self.config['device_token'])
                 if result.get('accepted') is not True:
@@ -284,12 +343,21 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('command', choices=('setup', 'discover', 'pair', 'run', 'status'))
     parser.add_argument('--server', help='Explicit HTTPS service origin, required for pairing')
-    parser.add_argument('--path', help='One explicitly selected Belmont 1.1.3 save file')
+    parser.add_argument('--path', help='One explicitly selected regular save file; never a directory or archive to extract')
+    parser.add_argument('--appid', type=int, help='Selected Steam AppID, 1..2147483647; required for pair, asked during setup')
+    parser.add_argument('--mode', choices=MODES, help='metadata: size/time only, no decoder needed; belmont-summary: only app 4231820 / format 1.1.3')
     parser.add_argument('--allow-local-test', action='store_true', help='Testing only: permit loopback HTTP')
     parser.add_argument('--enable', action='store_true', help='setup only: explicitly enable/start the user service after pairing')
     args = parser.parse_args(argv)
+    if args.appid is not None:
+        try:
+            selection(args.appid, args.mode or 'metadata')
+        except ValueError as error:
+            parser.error(str(error))
     if args.command == 'discover':
         from .discovery import discover
+        if args.appid not in (None, 4231820):
+            parser.error('No automatic path discovery for this game; select an explicit file with --path')
         candidates = discover()
         for candidate in candidates:
             print(str(candidate))
@@ -300,24 +368,26 @@ def main(argv=None):
         from .setup import setup
         if not args.server or args.allow_local_test:
             parser.error('setup requires --server HTTPS; local-test is not permitted')
-        return setup(args.server, args.path, enable=args.enable)
+        return setup(args.server, args.path, enable=args.enable, appid=args.appid, mode=args.mode)
     if args.enable:
         parser.error('--enable applies only to setup')
     try:
         store = Store()
         if args.command == 'pair':
-            if not args.server or not args.path:
-                parser.error('pair requires --server and --path')
-            pair(store, Transport(args.server, args.allow_local_test), args.path)
+            if not args.server or not args.path or args.appid is None:
+                parser.error('pair requires --server, --path and --appid; default mode is metadata')
+            pair(store, Transport(args.server, args.allow_local_test), args.path, appid=args.appid, mode=args.mode or 'metadata')
             return 0
         config = store.read('config.json')
         if args.command == 'status':
             state = store.read('state.json')
             print(json.dumps({'paired': bool(config), 'sync_status': state.get('sync_status', 'not_synced'),
                               'observed_at': state.get('observed_at'), 'synced_at': state.get('synced_at'),
-                              'queued': bool(state.get('queue'))}))
+                              'queued': bool(state.get('queue')), 'appid': config.get('appid', 4231820) if config else None,
+                              'mode': config.get('mode', 'belmont-summary') if config else None,
+                              'observation_status': state.get('observation_status', 'not_observed')}))
             return 0
-        if args.server or args.path:
+        if args.server or args.path or args.appid is not None or args.mode is not None:
             parser.error('run uses the paired server/path; pair again to change them')
         if not config:
             raise ValueError('Not paired')
@@ -327,7 +397,7 @@ def main(argv=None):
                 runner.tick()
             except (watch.SnapshotError, OSError, ValueError, KeyError, TypeError):
                 # Never print exception strings, paths, saves, credentials, or HTTP bodies.
-                print('Observation unavailable; previous summary retained.', flush=True)
+                print('Observation unavailable: file unreadable, unstable, oversized, or summary format unsupported. Previous remote observation retained; metadata mode requires separate explicit pairing.', flush=True)
                 runner.candidate = None
             time.sleep(runner.delay)
     except RePairRequired:
@@ -335,6 +405,6 @@ def main(argv=None):
         return 3
     except KeyboardInterrupt:
         return 0
-    except (OSError, ValueError, KeyError, TypeError, urllib.error.URLError):
+    except (watch.SnapshotError, OSError, ValueError, KeyError, TypeError, EOFError, urllib.error.URLError):
         print('Companion setup/state/network unavailable. Check private configuration and explicit consent; no credentials logged.')
         return 1

@@ -29,18 +29,21 @@ security review and restoration drills remain deployment gates.
 1. Mobile browser visits `/`; Steam OpenID verifies identity with Steam directly.
    No Steam password/API key is entered here. Server-side random session, Secure,
    HttpOnly, SameSite=Lax host cookie; one-time browser-bound login state.
-2. Deck calls `POST /v1/devices/pair/start {}`. Browser enters the displayed code at
-   the returned `/devices/approve`, explicitly chooses AppID 4231820 and permissions.
-   Summary is the existing version-1.1.3 **four raw player fields**, not HP/mana maxima,
-   pickup identification or established collectible semantics. Metadata grant is
-   selectable but metadata ingestion is intentionally unavailable.
+2. Deck calls `POST /v1/devices/pair/start {appid,scopes}` with the selected AppID and
+   `saves.metadata` or supported `saves.summary`. Legacy `{}` requests only Belmont
+   summary. Browser approval must match the requested game/scopes exactly. Register
+   unknown AppIDs in your account first. Generic metadata is only file size and
+   modification time. Belmont summary remains four raw fields for save format 1.1.3;
+   it does not establish exact game-build coverage, maxima or pickup semantics.
 3. Deck polls `POST /v1/devices/pair/poll {"device_code":"…"}` at five-second intervals.
    Pending returns `status:pending`; approval returns `status:approved`, `device_token`,
-   `token_type:Bearer`, `expires_in:2592000` **once**. Expiry/replay requires restarting
+   `token_type:Bearer`, `expires_in:2592000`, `appid` and `scopes` **once**. Expiry/replay requires restarting
    pairing. Device credential expires after 30 days and requires re-pairing; automatic
    device credential refresh is not implemented. This is not yet indefinite seamless UX.
 4. `POST /v1/device/observations` uses that device bearer and exactly
-   `{event_id:<UUID>, appid:4231820, kind:"save_summary", payload:<safe_summary>}`.
+   `{event_id:<UUID>, appid:<boundAppID>, kind, payload}`. Generic `save_metadata`
+   payload is exactly `{size_bytes:0..1073741824,modified_ns:0..2**63-1}` with strict
+   integers. `save_summary` remains the existing validated Belmont-only safe summary.
    Owner comes only from the token; all extra fields are rejected. No upload endpoint
    for raw saves, filenames, paths, world/entity IDs, SteamIDs or achievements exists.
 5. MCP client connects to `https://HOST/mcp`, discovers protected-resource and OAuth
@@ -50,7 +53,7 @@ security review and restoration drills remain deployment gates.
    the OAuth protocol endpoints, authentication, PKCE verification and MCP transport;
    application provider hooks own persistent opaque credentials and consent.
 6. `get_progress` / `suggest_next_step` accept no owner/game IDs, return only the
-   caller's currently allowed four-field projection or unknown state, and do not expose
+   caller's currently allowed metadata/summary projection or unknown state, and do not expose
    Steam identity. Revoking all access on the account page deletes grants, devices,
    pending device approvals and observations/events; it revokes OAuth credentials.
 
@@ -117,7 +120,7 @@ with `sslmode=require` must be strengthened and tested, not silently accepted.
 Do not paste connection strings in chats/logs or commit them. Enter a reviewed DSN
 only in the hosting provider's secret settings after account/setup authorization.
 
-All sixteen tables (sessions, login states, Steam nonce reservations, grants,
+All twenty tables (sessions, login states, Steam nonce reservations, grants,
 pairings, device credentials, observations, events, rate buckets, and OAuth data)
 share one durable database. A transaction-scoped advisory lock preserves the
 single-instance serialized behavior across independent connections, including
@@ -199,3 +202,37 @@ Retention is 30 days, cleaned on inbox access or new qualifying notice, with at 
 scheduler, LLM run, push notification, unsolicited assistant message or Steam Cloud
 source was added. The console-inspired server-rendered UI uses local CSS only and
 retains exact session/CSRF/origin boundaries. Database changes are additive tables.
+
+## Game selection, universal registration and real scoped access
+
+The account homepage now offers Belmont (4231820), Elden Ring (1245620), and
+The Witcher 3 (292030) as priority presets, not an imported owned Steam library.
+Users can register any canonical positive AppID up to 2147483647, with an optional
+plain-text label up to 120 characters, marked user-entered/unverified. Catalogs are
+private and bounded at 100 entries including presets. Registration/selection alone
+grants no file or sharing permissions. Community profile files remain declarative;
+no community entry automatically enables parser code or grants access.
+
+Single/multiple/all-current selection goes through a review page containing exact
+AppIDs and separate permission checkboxes. A per-owner revision digest includes the
+exact current catalog IDs/names; adding/renaming a game invalidates an old review.
+No wildcard or future-game permission is stored. `saves.metadata` now actually works
+for any selected AppID with a paired device, while `saves.summary` is available only
+for the reviewed Belmont 1.1.3 format. Elden Ring/Witcher 3/unknown formats have no
+verified interpretation. Neither scope grants Steam Cloud or achievements access.
+
+Device credentials, pairing intents, events, observations and revocation are bound
+to owner + AppID + allowed kind. A metadata credential cannot send a summary or
+write another game's observations. Per-game/per-kind revocation deletes scoped
+data and invalidates corresponding device credentials; re-grant does not reactivate
+old credentials. Other games remain intact. MCP filters each kind by current scope.
+
+Migration adds registrations, per-kind observations, fixed event/pairing columns and
+a one-time marker. Existing rows remain Belmont-only. Historical no-op metadata
+consent is removed once, not silently converted into working sharing permission;
+subsequent explicit real metadata grants survive restarts. No hosted database is
+modified by preparing these source files; the reviewed deployment runs migrations.
+
+Projection freshness is tracked separately as `summary_received_at` and
+`metadata_received_at`; a newer metadata receipt cannot make an older summary
+appear freshly observed. Combined `received_at` is only the latest server receipt.

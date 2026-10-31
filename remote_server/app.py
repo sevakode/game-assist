@@ -23,7 +23,7 @@ from mcp.server.auth.settings import AuthSettings, ClientRegistrationOptions, Re
 from mcp.server.auth.routes import build_metadata
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import ToolAnnotations
-from pydantic import AnyHttpUrl, ValidationError
+from pydantic import AnyHttpUrl, ValidationError, BaseModel, ConfigDict, Field
 from starlette.exceptions import HTTPException
 from starlette.middleware import Middleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
@@ -37,10 +37,22 @@ from server.steam import SteamService, SteamError
 from .oauth import OAuthProvider
 from .database import Database
 from . import ui
+from .games import CURRENT_GAME_IDS, CATALOG_REVISION, GAMES
 
 APPID = 4231820
 COOKIE = '__Host-ga_session'
-SCOPES = {'saves.summary', 'saves.metadata'}
+SCOPES = {'saves.summary','saves.metadata'}
+MAX_GAMES = 100
+
+class SaveMetadataSummary(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    size_bytes: int = Field(strict=True,ge=0,le=1073741824)
+    modified_ns: int = Field(strict=True,ge=0,le=2**63-1)
+
+def parse_appid(value):
+    if not isinstance(value,str) or not re.fullmatch(r'[1-9][0-9]{0,9}',value) or int(value)>2147483647:
+        raise HTTPException(422,'Positive Steam AppID up to 2147483647 required')
+    return int(value)
 NOTICE = 'Компаньон сообщил об изменении разрешённых счётчиков сохранения. Получение предметов или улучшений не подтверждено.'
 NOTIFICATION_FIELDS = ('healthUpgradeFragmentCount','manaUpgradeFragmentCount')
 INBOX_TTL = 30 * 86400
@@ -110,22 +122,84 @@ class Store:
             raise HTTPException(401, 'Sign in on this website first')
         return dict(row)
 
+    def catalog(self, owner, connection=None):
+        if connection is None:
+            with self.db() as db:
+                return self.catalog(owner,db)
+        db=connection
+        selected={row['appid'] for row in db.execute('SELECT appid FROM game_selections WHERE owner=?',(owner,))}
+        grants={(row['appid'],row['scope']) for row in db.execute('SELECT appid,scope FROM grants WHERE owner=?',(owner,))}
+        registered={row['appid']:row['label'] for row in db.execute('SELECT appid,label FROM game_registrations WHERE owner=?',(owner,))}
+        ids=list(CURRENT_GAME_IDS)+sorted(set(registered)-set(CURRENT_GAME_IDS))
+        return [{'appid':appid,'name':GAMES[appid]['name'] if appid in CURRENT_GAME_IDS else (registered[appid] or f'Steam AppID {appid}'),
+                 'user_label_unverified':appid not in CURRENT_GAME_IDS,
+                 'selected':appid in selected,
+                 'authorized':appid in selected and (appid,'saves.summary') in grants,
+                 'authorized_scopes':sorted(scope for scope in SCOPES if appid in selected and (appid,scope) in grants),
+                 'metadata_authorized':appid in selected and (appid,'saves.metadata') in grants,
+                 'summary_supported':appid==APPID,'metadata_supported':True,
+                 'cloud_available':False,'achievements_available':False,
+                 'parser_version':'1.1.3' if appid==APPID else None,'save_format_version':'1.1.3' if appid==APPID else None,'game_build':None,
+                 'source_status':'device_summary_only' if appid==APPID else 'metadata_only_parser_unavailable'} for appid in ids]
+
+    @staticmethod
+    def catalog_revision(owner,catalog):
+        return digest('catalog-v2:'+owner+':'+json.dumps([(g['appid'],g['name']) for g in catalog],ensure_ascii=False,separators=(',',':')))
+
+    @staticmethod
+    def revoke_scope(db,owner,appid,scope):
+        db.execute('DELETE FROM grants WHERE owner=? AND appid=? AND scope=?',(owner,appid,scope))
+        for row in db.execute('SELECT hash,scopes FROM devices WHERE owner=? AND appid=?',(owner,appid)).fetchall():
+            if scope in json.loads(row['scopes']):
+                db.execute('DELETE FROM events WHERE owner=? AND device_hash=?',(owner,row['hash']))
+                db.execute('DELETE FROM devices WHERE hash=? AND owner=?',(row['hash'],owner))
+        for row in db.execute('SELECT hash,scopes FROM pairings WHERE owner=? AND appid=?',(owner,appid)).fetchall():
+            if scope in json.loads(row['scopes'] or '[]'):
+                db.execute('DELETE FROM pairings WHERE hash=? AND owner=?',(row['hash'],owner))
+        kind='save_summary' if scope=='saves.summary' else 'save_metadata'
+        db.execute('DELETE FROM observations_v2 WHERE owner=? AND appid=? AND kind=?',(owner,appid,kind))
+        db.execute('DELETE FROM events WHERE owner=? AND appid=? AND kind=?',(owner,appid,kind))
+        if scope=='saves.summary':
+            for table in ('observations','notification_settings','notifications'):
+                db.execute(f'DELETE FROM {table} WHERE owner=? AND appid=?',(owner,appid))
+
+    @staticmethod
+    def revoke_game(db, owner, appid, deselect=False):
+        for scope in SCOPES:
+            Store.revoke_scope(db,owner,appid,scope)
+        for table in ('grants','devices','observations','observations_v2','notification_settings','notifications','events','pairings'):
+            db.execute(f'DELETE FROM {table} WHERE owner=? AND appid=?',(owner,appid))
+        if deselect:
+            db.execute('DELETE FROM game_selections WHERE owner=? AND appid=?',(owner,appid))
+
     def projection(self, owner):
+        result={'spoiler_policy':'strict','games':[]}
         with self.db() as db:
-            permitted = db.execute("SELECT 1 FROM grants WHERE owner=? AND appid=? AND scope='saves.summary'", (owner, APPID)).fetchone()
-            row = db.execute('SELECT payload,observed FROM observations WHERE owner=? AND appid=?', (owner, APPID)).fetchone() if permitted else None
-        result = {'spoiler_policy': 'strict', 'games': []}
-        if permitted:
-            result['games'] = [{'appid': APPID, 'status': 'unknown' if not row else 'reported_not_independently_verified',
-                                'summary': SaveSummary.model_validate_json(row['payload']).model_dump(mode='json') if row else None,
-                                'received_at': row['observed'] if row else None, 'observation_time': 'unknown'}]
+            catalog=self.catalog(owner,db)
+            for game in catalog:
+                scopes=game['authorized_scopes']
+                if not game['selected'] or not scopes:
+                    continue
+                item={'appid':game['appid'],'status':'unknown','summary':None,'metadata':None,'received_at':None,'summary_received_at':None,'metadata_received_at':None,'observation_time':'unknown',
+                      'summary_supported':game['summary_supported'],'cloud_available':False,'achievements_available':False}
+                for kind,scope,model,key in [('save_summary','saves.summary',SaveSummary,'summary'),('save_metadata','saves.metadata',SaveMetadataSummary,'metadata')]:
+                    if scope not in scopes or (kind=='save_summary' and game['appid']!=APPID):
+                        continue
+                    row=db.execute('SELECT payload,observed FROM observations_v2 WHERE owner=? AND appid=? AND kind=?',(owner,game['appid'],kind)).fetchone()
+                    if row:
+                        item[key]=model.model_validate_json(row['payload']).model_dump(mode='json')
+                        item[key+'_received_at']=row['observed']
+                        item['received_at']=max(item['received_at'] or 0,row['observed'])
+                if item['summary'] is not None:item['status']='reported_not_independently_verified'
+                elif item['metadata'] is not None:item['status']='metadata_only_not_game_progress'
+                result['games'].append(item)
         return result
 
     def inbox(self, owner):
         now = time.time()
         with self.db() as db:
             db.execute('DELETE FROM notifications WHERE created<?', (now-INBOX_TTL,))
-            permitted = bool(db.execute("SELECT 1 FROM grants WHERE owner=? AND appid=? AND scope='saves.summary'", (owner,APPID)).fetchone())
+            permitted = bool(db.execute("SELECT 1 FROM grants WHERE owner=? AND appid=? AND scope='saves.summary'", (owner,APPID)).fetchone()) and bool(db.execute('SELECT 1 FROM game_selections WHERE owner=? AND appid=?',(owner,APPID)).fetchone())
             settings = db.execute('SELECT enabled FROM notification_settings WHERE owner=? AND appid=?', (owner,APPID)).fetchone()
             rows = db.execute('SELECT id,created,read_at FROM notifications WHERE owner=? AND appid=? ORDER BY created DESC,id DESC LIMIT 50', (owner,APPID)).fetchall() if permitted else []
         items = [{'id':row['id'], 'message':NOTICE, 'created_at':row['created'], 'read':row['read_at'] is not None} for row in rows]
@@ -322,9 +396,21 @@ def create_app(config=None, steam=None, database=None, download_dir=None):
         try:
             session = store.session(request, True)
         except HTTPException:
-            return page('Игровой спутник', ui.landing_body())
+            requested=request.query_params.get('game')
+            if requested is not None and requested not in {str(i) for i in CURRENT_GAME_IDS}:
+                raise HTTPException(404,'Public game preset unavailable')
+            return page('Игровой спутник', ui.landing_body(selected_appid=int(requested) if requested else None))
         inbox = store.inbox(session['owner'])
-        return page('Твоя игровая станция', ui.home_body(store.projection(session['owner']),session['csrf'],inbox,capabilities={'mcp_url':config.issuer+'/mcp'}))
+        catalog = store.catalog(session['owner'])
+        requested = request.query_params.get('game')
+        selected_ids = {item['appid'] for item in catalog if item['selected']}
+        try:
+            focus = int(requested) if requested is not None else next((g['appid'] for g in catalog if g['appid'] in selected_ids),None)
+        except (ValueError,TypeError):
+            raise HTTPException(400,'Invalid game') from None
+        if requested is not None and focus not in selected_ids:
+            raise HTTPException(404,'Selected game unavailable')
+        return page('Твоя игровая станция', ui.home_body(store.projection(session['owner']),session['csrf'],inbox,capabilities={'mcp_url':config.issuer+'/mcp','catalog':catalog,'catalog_revision':store.catalog_revision(session['owner'],catalog),'selected_appid':focus}))
 
     async def login(request):
         next_path = request.query_params.get('next', '/')
@@ -384,16 +470,23 @@ def create_app(config=None, steam=None, database=None, download_dir=None):
         return response
 
     async def pair_start(request):
-        data = await json_body(request)
-        if data != {}:
-            raise HTTPException(422, 'Empty object required')
-        code, user = secrets.token_urlsafe(32), secrets.token_hex(4).upper()
+        data=await json_body(request)
+        if data=={}:
+            appid,scopes=APPID,['saves.summary']
+        else:
+            if set(data)!={'appid','scopes'} or type(data['appid']) is not int or not 0<data['appid']<=2147483647 or not isinstance(data['scopes'],list):
+                raise HTTPException(422,'Explicit AppID and scopes required')
+            appid=data['appid'];scopes=data['scopes']
+            if not scopes or len(scopes)>2 or any(not isinstance(x,str) or x not in SCOPES for x in scopes) or len(set(scopes))!=len(scopes) or ('saves.summary' in scopes and appid!=APPID):
+                raise HTTPException(422,'Unsupported game/source pairing request')
+            scopes=sorted(scopes)
+        code,user=secrets.token_urlsafe(32),secrets.token_hex(4).upper()
         with store.db() as db:
-            db.execute('DELETE FROM pairings WHERE expires<?', (time.time(),))
-            if db.execute('SELECT count(*) FROM pairings').fetchone()[0] >= 2000:
-                raise HTTPException(429, 'Pairing capacity reached')
-            db.execute('INSERT INTO pairings(hash,user_hash,expires) VALUES(?,?,?)', (digest(code), digest(user), time.time()+600))
-        return JSONResponse({'device_code':code, 'user_code':user, 'verification_uri': config.issuer+'/devices/approve', 'expires_in':600, 'interval':5})
+            db.execute('DELETE FROM pairings WHERE expires<?',(time.time(),))
+            if db.execute('SELECT count(*) FROM pairings').fetchone()[0]>=2000:
+                raise HTTPException(429,'Pairing capacity reached')
+            db.execute('INSERT INTO pairings(hash,user_hash,expires,appid,requested_scopes) VALUES(?,?,?,?,?)',(digest(code),digest(user),time.time()+600,appid,json.dumps(scopes)))
+        return JSONResponse({'device_code':code,'user_code':user,'verification_uri':config.issuer+'/devices/approve','expires_in':600,'interval':5,'appid':appid,'scopes':scopes})
 
     async def pair_poll(request):
         data = await json_body(request)
@@ -410,76 +503,86 @@ def create_app(config=None, steam=None, database=None, download_dir=None):
             db.execute('UPDATE pairings SET last_poll=? WHERE hash=?', (time.time(), key))
             if not row['owner']:
                 return JSONResponse({'status':'pending','interval':5})
+            scopes=json.loads(row['scopes'])
+            if not db.execute('SELECT 1 FROM game_selections WHERE owner=? AND appid=?',(row['owner'],row['appid'])).fetchone() or any(not db.execute('SELECT 1 FROM grants WHERE owner=? AND appid=? AND scope=?',(row['owner'],row['appid'],scope)).fetchone() for scope in scopes):
+                return JSONResponse({'status':'expired'},400)
             db.execute('DELETE FROM devices WHERE expires<=?', (time.time(),))
             if db.execute('SELECT count(*) FROM devices WHERE owner=?',(row['owner'],)).fetchone()[0] >= 100:
                 raise HTTPException(429, 'Device quota reached; revoke unused devices')
             raw = secrets.token_urlsafe(32)
-            db.execute('INSERT INTO devices VALUES(?,?,?,?,?)', (digest(raw),row['owner'],APPID,row['scopes'],time.time()+2592000))
+            db.execute('INSERT INTO devices VALUES(?,?,?,?,?)', (digest(raw),row['owner'],row['appid'],row['scopes'],time.time()+2592000))
             db.execute('UPDATE pairings SET consumed=1 WHERE hash=?', (key,))
-        return JSONResponse({'status':'approved','device_token':raw,'token_type':'Bearer','expires_in':2592000})
+        return JSONResponse({'status':'approved','device_token':raw,'token_type':'Bearer','expires_in':2592000,'appid':row['appid'],'scopes':scopes})
 
     async def approve_device(request):
         try:
-            session = store.session(request, True)
+            session=store.session(request,True)
         except HTTPException:
-            if request.method == 'GET':
-                return RedirectResponse('/login?' + urlencode({'next':'/devices/approve'}),303)
+            if request.method=='GET':return RedirectResponse('/login?'+urlencode({'next':'/devices/approve'}),303)
             raise
-        if request.method == 'GET':
-            return page('Подключить Deck', ui.device_body(session['csrf']))
-        data = await form(request, session, config.issuer)
-        store.limit('approve:'+session['owner'], 10)
-        if set(data)-{'csrf','user_code','appid',*SCOPES} or data.get('appid')!=str(APPID):
-            raise HTTPException(422, 'Choose the supported game explicitly')
-        scopes = sorted(s for s in SCOPES if data.get(s)=='yes')
-        if not scopes:
-            raise HTTPException(422, 'Choose at least one permission')
-        user = str(data.get('user_code','')).upper()
-        if not re.fullmatch('[A-F0-9]{8}', user):
-            raise HTTPException(400, 'Invalid or expired device code')
+        if request.method=='GET':
+            return page('Подключить устройство',ui.device_body(session['csrf'],catalog=store.catalog(session['owner'])))
+        data=await form(request,session,config.issuer)
+        store.limit('approve:'+session['owner'],10)
+        if set(data)-{'csrf','user_code','appid',*SCOPES}:
+            raise HTTPException(422,'Unknown pairing field')
+        appid=parse_appid(str(data.get('appid','')))
+        if any(data.get(scope) not in (None,'yes') for scope in SCOPES):
+            raise HTTPException(422,'Explicit permissions required')
+        scopes=sorted(scope for scope in SCOPES if data.get(scope)=='yes')
+        user=str(data.get('user_code','')).upper()
+        if not scopes or not re.fullmatch('[A-F0-9]{8}',user):
+            raise HTTPException(400,'Invalid device code or permissions')
         with store.db() as db:
-            row = db.execute('UPDATE pairings SET owner=?,scopes=? WHERE user_hash=? AND expires>? AND owner IS NULL AND consumed=0 RETURNING hash',
-                (session['owner'],json.dumps(scopes),digest(user),time.time())).fetchone()
-            if not row:
-                raise HTTPException(400, 'Invalid or expired device code')
-            for s in scopes:
-                db.execute('INSERT OR IGNORE INTO grants VALUES(?,?,?)', (session['owner'],APPID,s))
-        return page('Устройство подключено', ui.approved_body())
+            if appid not in {g['appid'] for g in store.catalog(session['owner'],db)}:
+                raise HTTPException(422,'Add this AppID to your games before pairing')
+            pending=db.execute('SELECT * FROM pairings WHERE user_hash=? AND expires>? AND owner IS NULL AND consumed=0',(digest(user),time.time())).fetchone()
+            if not pending:
+                raise HTTPException(400,'Invalid or expired device code')
+            if appid!=pending['appid'] or scopes!=sorted(json.loads(pending['requested_scopes'])) or ('saves.summary' in scopes and appid!=APPID):
+                raise HTTPException(422,'Game and scopes must exactly match the request shown on your device')
+            db.execute('UPDATE pairings SET owner=?,scopes=? WHERE hash=?',(session['owner'],json.dumps(scopes),pending['hash']))
+            db.execute('INSERT INTO game_selections(owner,appid,selected_at) VALUES(?,?,?) ON CONFLICT(owner,appid) DO NOTHING',(session['owner'],appid,time.time()))
+            for scope in scopes:db.execute('INSERT OR IGNORE INTO grants VALUES(?,?,?)',(session['owner'],appid,scope))
+        return page('Устройство подключено',ui.approved_body())
 
     async def ingest(request):
-        bearer = request.headers.get('authorization','')
+        bearer=request.headers.get('authorization','')
         if not bearer.startswith('Bearer ') or len(bearer)>150:
-            raise HTTPException(401, 'Device credential required')
-        key = digest(bearer[7:])
-        store.limit('ingest:'+key, 120)
-        data = await json_body(request)
+            raise HTTPException(401,'Device credential required')
+        key=digest(bearer[7:]);store.limit('ingest:'+key,120)
+        data=await json_body(request)
         try:
-            if set(data) != {'event_id','appid','kind','payload'} or type(data['appid']) is not int or data['appid']!=APPID or data['kind']!='save_summary':
+            if set(data)!={'event_id','appid','kind','payload'} or type(data['appid']) is not int or not 0<data['appid']<=2147483647:
                 raise ValueError()
-            if not isinstance(data['event_id'], str) or len(data['event_id']) != 36:
-                raise ValueError()
+            if not isinstance(data['event_id'],str) or len(data['event_id'])!=36:raise ValueError()
             UUID(data['event_id'])
-            payload = SaveSummary.model_validate(data['payload']).model_dump_json()
-        except (ValueError, TypeError, KeyError, ValidationError):
-            raise HTTPException(422, 'Only supported four-field summaries are accepted') from None
+            appid,kind=data['appid'],data['kind']
+            if kind=='save_summary' and appid==APPID:
+                model,scope=SaveSummary,'saves.summary'
+            elif kind=='save_metadata':
+                model,scope=SaveMetadataSummary,'saves.metadata'
+            else:raise ValueError()
+            payload=model.model_validate(data['payload']).model_dump_json()
+        except (ValueError,TypeError,KeyError,ValidationError):
+            raise HTTPException(422,'Only permitted bounded metadata or supported four-field summaries are accepted') from None
         with store.db() as db:
-            device = db.execute('SELECT * FROM devices WHERE hash=? AND expires>?', (key,time.time())).fetchone()
-            if not device:
-                raise HTTPException(401, 'Invalid device credential')
-            if 'saves.summary' not in json.loads(device['scopes']) or not db.execute("SELECT 1 FROM grants WHERE owner=? AND appid=? AND scope='saves.summary'", (device['owner'], APPID)).fetchone():
-                raise HTTPException(403, 'Current game permission required')
-            prior = db.execute('SELECT payload_hash FROM events WHERE device_hash=? AND event_id=?', (key,data['event_id'])).fetchone()
-            duplicate = bool(prior)
-            if prior and prior['payload_hash'] != digest(payload):
-                raise HTTPException(409, 'Event ID already used with different content')
+            device=db.execute('SELECT * FROM devices WHERE hash=? AND expires>?',(key,time.time())).fetchone()
+            if not device:raise HTTPException(401,'Invalid device credential')
+            if device['appid']!=appid or scope not in json.loads(device['scopes']) or not db.execute('SELECT 1 FROM grants WHERE owner=? AND appid=? AND scope=?',(device['owner'],appid,scope)).fetchone() or not db.execute('SELECT 1 FROM game_selections WHERE owner=? AND appid=?',(device['owner'],appid)).fetchone():
+                raise HTTPException(403,'Current scoped game permission required')
+            prior=db.execute('SELECT payload_hash,appid,kind FROM events WHERE device_hash=? AND event_id=?',(key,data['event_id'])).fetchone()
+            duplicate=bool(prior)
+            if prior and (prior['payload_hash']!=digest(payload) or prior['appid']!=appid or prior['kind']!=kind):
+                raise HTTPException(409,'Event ID already used with different content')
             if not duplicate:
-                db.execute('DELETE FROM events WHERE created<?', (time.time()-2678400,))
-                if db.execute('SELECT count(*) FROM events WHERE device_hash=?', (key,)).fetchone()[0] >= 10000:
-                    raise HTTPException(429, 'Device event quota reached; re-pair required')
-                db.execute('INSERT INTO events VALUES(?,?,?,?,?)', (device['owner'],key,data['event_id'],time.time(),digest(payload)))
-                now = time.time()
-                db.execute('INSERT OR REPLACE INTO observations VALUES(?,?,?,?)', (device['owner'],APPID,payload,now))
-                store.record_notification(db,device['owner'],APPID,payload,key+':'+data['event_id'],now)
+                now=time.time()
+                db.execute('DELETE FROM events WHERE created<?',(now-2678400,))
+                if db.execute('SELECT count(*) FROM events WHERE device_hash=?',(key,)).fetchone()[0]>=10000:
+                    raise HTTPException(429,'Device event quota reached; re-pair required')
+                db.execute('INSERT INTO events(owner,device_hash,event_id,created,payload_hash,appid,kind) VALUES(?,?,?,?,?,?,?)',(device['owner'],key,data['event_id'],now,digest(payload),appid,kind))
+                db.execute('INSERT INTO observations_v2(owner,appid,kind,payload,observed) VALUES(?,?,?,?,?) ON CONFLICT(owner,appid,kind) DO UPDATE SET payload=excluded.payload,observed=excluded.observed',(device['owner'],appid,kind,payload,now))
+                if kind=='save_summary':store.record_notification(db,device['owner'],appid,payload,key+':'+data['event_id'],now)
         return JSONResponse({'accepted':True,'duplicate':duplicate})
 
     async def consent(request):
@@ -507,6 +610,83 @@ def create_app(config=None, steam=None, database=None, download_dir=None):
             raise HTTPException(400, 'Expired authorization request') from None
         return RedirectResponse(target,303)
 
+    async def add_game(request):
+        session=store.session(request,True)
+        data=await form(request,session,config.issuer)
+        if set(data)-{'csrf','appid','label'} or 'appid' not in data:
+            raise HTTPException(422,'AppID and optional label required')
+        appid=parse_appid(data['appid'])
+        label=str(data.get('label','')).strip()
+        if len(label)>120 or (label and not label.isprintable()):
+            raise HTTPException(422,'Use a plain text label up to 120 characters')
+        with store.db() as db:
+            ids={g['appid'] for g in store.catalog(session['owner'],db)}
+            if appid not in ids and len(ids)>=MAX_GAMES:
+                raise HTTPException(429,'Maximum 100 games per account')
+            if appid not in CURRENT_GAME_IDS:
+                db.execute('INSERT INTO game_registrations(owner,appid,label,created) VALUES(?,?,?,?) ON CONFLICT(owner,appid) DO UPDATE SET label=excluded.label',(session['owner'],appid,label,time.time()))
+        return RedirectResponse('/#library',303)
+
+    async def choose_games(request):
+        session=store.session(request,True)
+        data=await form(request,session,config.issuer)
+        catalog=store.catalog(session['owner'])
+        ids={g['appid'] for g in catalog}
+        game_fields={f'game_{i}' for i in ids}
+        metadata_fields={f'metadata_{i}' for i in ids}
+        choices=game_fields|metadata_fields|{'summary_4231820'}
+        if set(data)-({'csrf','action','catalog_revision'}|choices) or any(data.get(k) not in (None,'yes') for k in choices):
+            raise HTTPException(422,'Unknown or invalid game choice')
+        action=data.get('action')
+        if action not in ('review','review_all','confirm'):
+            raise HTTPException(422,'Review or confirm games')
+        selected=ids if action=='review_all' else {i for i in ids if data.get(f'game_{i}')=='yes'}
+        if action!='confirm':
+            revision=store.catalog_revision(session['owner'],catalog)
+            for game in catalog:game['selected']=game['appid'] in selected
+            return page('Проверить игры и разрешения',ui.games_review_body(session['csrf'],catalog,catalog_revision=revision))
+        summary=data.get('summary_4231820')=='yes'
+        metadata={i for i in ids if data.get(f'metadata_{i}')=='yes'}
+        if (summary and APPID not in selected) or metadata-selected:
+            raise HTTPException(422,'Select a game before granting access')
+        with store.db() as db:
+            if data.get('catalog_revision')!=store.catalog_revision(session['owner'],store.catalog(session['owner'],db)):
+                raise HTTPException(409,'Game list changed; review it again')
+            previous={row['appid'] for row in db.execute('SELECT appid FROM game_selections WHERE owner=?',(session['owner'],))}
+            for appid in previous-selected:store.revoke_game(db,session['owner'],appid,deselect=True)
+            for appid in selected:
+                db.execute('INSERT INTO game_selections(owner,appid,selected_at) VALUES(?,?,?) ON CONFLICT(owner,appid) DO NOTHING',(session['owner'],appid,time.time()))
+                for scope,enabled in [('saves.metadata',appid in metadata),('saves.summary',appid==APPID and summary)]:
+                    if enabled:db.execute('INSERT OR IGNORE INTO grants VALUES(?,?,?)',(session['owner'],appid,scope))
+                    else:store.revoke_scope(db,session['owner'],appid,scope)
+        return RedirectResponse('/',303)
+
+    async def game_permission(request):
+        session=store.session(request,True)
+        data=await form(request,session,config.issuer)
+        if set(data)!={'csrf','appid','scope','enabled'} or data.get('enabled') not in ('yes','no'):
+            raise HTTPException(422,'Explicit game and scope required')
+        appid=parse_appid(data['appid']);scope=data['scope']
+        if scope not in SCOPES or (scope=='saves.summary' and appid!=APPID):
+            raise HTTPException(422,'This interpretation capability is unavailable')
+        with store.db() as db:
+            if not db.execute('SELECT 1 FROM game_selections WHERE owner=? AND appid=?',(session['owner'],appid)).fetchone():
+                raise HTTPException(403,'Select this game first')
+            if data['enabled']=='yes':db.execute('INSERT OR IGNORE INTO grants VALUES(?,?,?)',(session['owner'],appid,scope))
+            else:store.revoke_scope(db,session['owner'],appid,scope)
+        return RedirectResponse('/',303)
+
+    async def revoke_selected_game(request):
+        session=store.session(request,True)
+        data=await form(request,session,config.issuer)
+        if set(data)!={'csrf','appid'}:raise HTTPException(422,'Game required')
+        appid=parse_appid(data['appid'])
+        with store.db() as db:
+            if appid not in {g['appid'] for g in store.catalog(session['owner'],db)}:
+                raise HTTPException(404,'Game unavailable')
+            store.revoke_game(db,session['owner'],appid,deselect=True)
+        return RedirectResponse('/',303)
+
     async def notification_settings(request):
         session = store.session(request,True)
         data = await form(request,session,config.issuer)
@@ -519,7 +699,7 @@ def create_app(config=None, steam=None, database=None, download_dir=None):
             previous = db.execute('SELECT enabled,epoch FROM notification_settings WHERE owner=? AND appid=?',(session['owner'],APPID)).fetchone()
             # Repeated identical choice is idempotent, not a new consent epoch.
             if not previous or bool(previous['enabled']) != enabled:
-                row = db.execute('SELECT payload FROM observations WHERE owner=? AND appid=?',(session['owner'],APPID)).fetchone() if enabled else None
+                row = db.execute("SELECT payload FROM observations_v2 WHERE owner=? AND appid=? AND kind='save_summary'",(session['owner'],APPID)).fetchone() if enabled else None
                 epoch = previous['epoch']+1 if previous else 1
                 db.execute('INSERT INTO notification_settings(owner,appid,enabled,baseline,epoch,updated) VALUES(?,?,?,?,?,?) ON CONFLICT(owner,appid) DO UPDATE SET enabled=excluded.enabled,baseline=excluded.baseline,epoch=excluded.epoch,updated=excluded.updated',
                     (session['owner'],APPID,int(enabled),row['payload'] if row else None,epoch,time.time()))
@@ -549,7 +729,7 @@ def create_app(config=None, steam=None, database=None, download_dir=None):
         session=store.session(request,True)
         await form(request,session,config.issuer)
         with store.db() as db:
-            for table in ('grants','devices','observations','events','notification_settings','notifications'):
+            for table in ('grants','devices','observations','events','notification_settings','notifications','game_selections','observations_v2'):
                 db.execute(f'DELETE FROM {table} WHERE owner=?',(session['owner'],))
             db.execute('DELETE FROM pairings WHERE owner=?',(session['owner'],))
             provider.revoke_subject(session['owner'], connection=db)
@@ -574,7 +754,7 @@ def create_app(config=None, steam=None, database=None, download_dir=None):
     app.routes.extend([Route('/assets/console.css',stylesheet),Route('/setup',setup_page),Route('/downloads/deck-companion.zip',download),Route('/downloads/deck-companion.zip.sha256',download_checksum),Route('/healthz',health),Route('/',home),Route('/login',login),Route('/steam/callback',callback),
         Route('/v1/devices/pair/start',pair_start,methods=['POST']),Route('/v1/devices/pair/poll',pair_poll,methods=['POST']),
         Route('/devices/approve',approve_device,methods=['GET','POST']),Route('/v1/device/observations',ingest,methods=['POST']),
-        Route('/oauth/consent',consent,methods=['GET','POST']),Route('/account/notifications',notification_settings,methods=['POST']),Route('/account/notifications/read',notification_read,methods=['POST']),Route('/account/revoke',revoke,methods=['POST']),Route('/logout',logout,methods=['POST'])])
+        Route('/oauth/consent',consent,methods=['GET','POST']),Route('/account/games/add',add_game,methods=['POST']),Route('/account/games',choose_games,methods=['POST']),Route('/account/games/permissions',game_permission,methods=['POST']),Route('/account/games/revoke',revoke_selected_game,methods=['POST']),Route('/account/notifications',notification_settings,methods=['POST']),Route('/account/notifications/read',notification_read,methods=['POST']),Route('/account/revoke',revoke,methods=['POST']),Route('/logout',logout,methods=['POST'])])
     app.add_middleware(Boundary,config=config,store=store)
     app.add_middleware(TrustedHostMiddleware,allowed_hosts=[urlsplit(config.issuer).hostname])
     app.state.store,app.state.provider,app.state.config=store,provider,config

@@ -36,7 +36,7 @@ class FakeTransport:
             return {'verification_uri': self.origin + '/pair', 'user_code': 'ABCD-1234',
                     'device_code': 'PRIVATE_DEVICE_CODE', 'expires_in': 600, 'interval': 5}
         if route.endswith('/poll'):
-            return {'status': 'approved', 'device_token': 'PRIVATE_TOKEN', 'expires_in': 1000}
+            return {'status': 'approved', 'device_token': 'PRIVATE_TOKEN', 'expires_in': 1000, 'appid': self.calls[0][1]['appid'], 'scopes': self.calls[0][1]['scopes']}
         return {'accepted': True, 'duplicate': False}
 
 
@@ -227,7 +227,7 @@ class DeckTests(unittest.TestCase):
                  patch('deck.setup.Store'), patch('deck.setup.Transport'), \
                  patch('deck.setup.subprocess.run') as command, \
                  contextlib.redirect_stdout(io.StringIO()):
-                result = setup('https://companion.example', str(self.save), enable=enable, ask=lambda _: 'no')
+                result = setup('https://companion.example', str(self.save), enable=enable, ask=lambda _: 'no', appid=4231820, mode='belmont-summary')
                 self.assertEqual(result, 0)
                 installer.assert_called_once()
                 pairing.assert_called_once()
@@ -240,7 +240,7 @@ class DeckTests(unittest.TestCase):
              patch('deck.setup.install'), patch('deck.setup.pair', side_effect=ValueError('private')), \
              patch('deck.setup.Store'), patch('deck.setup.Transport'), \
              patch('deck.setup.subprocess.run') as command, contextlib.redirect_stdout(io.StringIO()):
-            self.assertEqual(setup('https://companion.example', str(self.save), enable=True), 1)
+            self.assertEqual(setup('https://companion.example', str(self.save), enable=True, appid=4231820, mode='belmont-summary'), 1)
             command.assert_not_called()
 
     def test_transport_uses_no_proxies_and_refuses_redirects(self):

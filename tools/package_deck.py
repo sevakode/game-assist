@@ -24,7 +24,13 @@ Extract this archive, inspect the source, then run from the extracted directory:
 Use the exact HTTPS origin shown by the service's /setup page, not this placeholder.
 Explicitly select your save path. On your phone open the displayed pairing URL,
 sign in with Steam, compare the code shown on your own Deck, and select the game
-and permitted four-field summary. Approve only your own device. The setup asks
+and permitted access. New setup asks for the selected Steam AppID and defaults to
+minimal metadata: only file size and modification time, not contents or progress.
+An explicit Belmont 4231820 / 1.1.3 mode can send the four-field summary instead.
+Unknown games need one explicit file path and registration on the service first.
+Only one selected file/game is watched; re-pairing replaces it after confirmation.
+The file-to-game association is user-declared, not automatically verified.
+Approve only your own device. The setup asks
 before enabling the user-only background service. No game saves are modified.
 
 Do not disable SteamOS protections or install missing runtime components blindly.
