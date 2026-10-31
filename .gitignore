@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+*.db
+*.db-*
+.env
+.venv/
+.pytest_cache/
+.coverage
+
+# Private local credentials and player data
+private-game-fixtures/
+*.sav
+config.json
+state.json
+*.db-wal
+*.db-shm

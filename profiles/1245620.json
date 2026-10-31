@@ -1,0 +1,16 @@
+{
+  "appid": 1245620,
+  "title": "ELDEN RING",
+  "source": "https://store.steampowered.com/app/1245620/",
+  "capabilities": {
+    "steam_achievements": "requires_live_verification",
+    "steam_cloud": "not_connected",
+    "save_parser": "unavailable"
+  },
+  "spoiler_policy": "strict",
+  "warnings": [
+    "Game identity only, not player progress.",
+    "No validated save decoder or missable-item rules implemented.",
+    "Locked achievements must not be exposed to the website or MCP."
+  ]
+}

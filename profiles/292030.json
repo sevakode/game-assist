@@ -1,0 +1,16 @@
+{
+  "appid": 292030,
+  "title": "The Witcher 3: Wild Hunt",
+  "source": "https://store.steampowered.com/app/292030/",
+  "capabilities": {
+    "steam_achievements": "requires_live_verification",
+    "steam_cloud": "not_connected",
+    "save_parser": "unavailable"
+  },
+  "spoiler_policy": "strict",
+  "warnings": [
+    "Game identity only, not player progress.",
+    "No validated save decoder or missable-item rules implemented.",
+    "Locked achievements must not be exposed to the website or MCP."
+  ]
+}

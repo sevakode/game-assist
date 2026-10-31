@@ -1,0 +1,15 @@
+{
+  "appid": 4231820,
+  "title": "Castlevania: Belmont's Curse",
+  "source": "https://store.steampowered.com/app/4231820/",
+  "capabilities": {
+    "steam_achievements": "requires_live_verification",
+    "steam_cloud": "not_connected",
+    "save_parser": "unavailable"
+  },
+  "warnings": [
+    "This is a game identity profile, not player progress.",
+    "No validated save decoder or coverage measurement is available.",
+    "Never infer items, bosses, or map completion from file metadata."
+  ]
+}

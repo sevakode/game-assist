@@ -1,0 +1,22 @@
+# Source-only blueprint. Nothing is deployed or provisioned by this file.
+# Place repository root at the directory containing requirements.txt/remote_server.
+services:
+  - type: web
+    name: game-assist
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt -r remote_server/requirements.txt && python tools/package_deck.py
+    startCommand: python -m remote_server
+    healthCheckPath: /healthz
+    autoDeployTrigger: 'off'
+    # Origin defaults only in render mode to the trusted RENDER_EXTERNAL_URL.
+    # Set GA_PUBLIC_ORIGIN explicitly when using a custom domain.
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.12
+      - key: GA_DEPLOYMENT_MODE
+        value: render
+      - key: GA_OAUTH_REDIRECT_URIS
+        sync: false
+      - key: DATABASE_URL
+        sync: false

@@ -1,0 +1,363 @@
+{
+  "$defs": {
+    "FlagMapping": {
+      "additionalProperties": false,
+      "properties": {
+        "appid": {
+          "exclusiveMinimum": 0,
+          "title": "Appid",
+          "type": "integer"
+        },
+        "game_version": {
+          "minLength": 1,
+          "title": "Game Version",
+          "type": "string"
+        },
+        "parser_id": {
+          "minLength": 1,
+          "title": "Parser Id",
+          "type": "string"
+        },
+        "parser_version": {
+          "minLength": 1,
+          "title": "Parser Version",
+          "type": "string"
+        },
+        "flag_key": {
+          "minLength": 1,
+          "title": "Flag Key",
+          "type": "string"
+        },
+        "meaning": {
+          "enum": [
+            "per_item_collection",
+            "hint_eligibility"
+          ],
+          "title": "Meaning",
+          "type": "string"
+        },
+        "true_value": {
+          "title": "True Value",
+          "type": "boolean"
+        },
+        "review": {
+          "$ref": "#/$defs/Review"
+        }
+      },
+      "required": [
+        "appid",
+        "game_version",
+        "parser_id",
+        "parser_version",
+        "flag_key",
+        "meaning",
+        "true_value"
+      ],
+      "title": "FlagMapping",
+      "type": "object"
+    },
+    "FullLocation": {
+      "additionalProperties": false,
+      "description": "Spoiler-bearing public reference data: never serialize into a safe hint.",
+      "properties": {
+        "area": {
+          "minLength": 1,
+          "title": "Area",
+          "type": "string"
+        },
+        "instructions": {
+          "minLength": 1,
+          "title": "Instructions",
+          "type": "string"
+        },
+        "requirements": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Requirements",
+          "type": "array"
+        },
+        "requirement_record_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Requirement Record Ids",
+          "type": "array"
+        },
+        "review": {
+          "$ref": "#/$defs/Review"
+        }
+      },
+      "required": [
+        "area",
+        "instructions"
+      ],
+      "title": "FullLocation",
+      "type": "object"
+    },
+    "Record": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "id": {
+          "pattern": "^[a-z0-9][a-z0-9._-]+$",
+          "title": "Id",
+          "type": "string"
+        },
+        "appid": {
+          "exclusiveMinimum": 0,
+          "title": "Appid",
+          "type": "integer"
+        },
+        "game_version": {
+          "minLength": 1,
+          "title": "Game Version",
+          "type": "string"
+        },
+        "object_type": {
+          "enum": [
+            "hp_upgrade",
+            "mana_upgrade"
+          ],
+          "title": "Object Type",
+          "type": "string"
+        },
+        "synthetic": {
+          "default": false,
+          "title": "Synthetic",
+          "type": "boolean"
+        },
+        "full_location": {
+          "$ref": "#/$defs/FullLocation"
+        },
+        "safe_hint": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SafeHint"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "collection_mapping": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FlagMapping"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "sources": {
+          "items": {
+            "$ref": "#/$defs/Source"
+          },
+          "minItems": 1,
+          "title": "Sources",
+          "type": "array"
+        },
+        "rights": {
+          "$ref": "#/$defs/Rights"
+        }
+      },
+      "required": [
+        "schema_version",
+        "id",
+        "appid",
+        "game_version",
+        "object_type",
+        "full_location",
+        "sources",
+        "rights"
+      ],
+      "title": "Record",
+      "type": "object"
+    },
+    "Review": {
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "default": "unverified",
+          "enum": [
+            "unverified",
+            "verified"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "reviewer": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reviewer"
+        },
+        "evidence_source_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Evidence Source Ids",
+          "type": "array"
+        },
+        "notes": {
+          "default": "",
+          "title": "Notes",
+          "type": "string"
+        }
+      },
+      "title": "Review",
+      "type": "object"
+    },
+    "Rights": {
+      "additionalProperties": false,
+      "properties": {
+        "contributor": {
+          "minLength": 1,
+          "title": "Contributor",
+          "type": "string"
+        },
+        "basis": {
+          "enum": [
+            "original",
+            "authorized"
+          ],
+          "title": "Basis",
+          "type": "string"
+        },
+        "license": {
+          "minLength": 1,
+          "title": "License",
+          "type": "string"
+        },
+        "permission_reference": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Permission Reference"
+        }
+      },
+      "required": [
+        "contributor",
+        "basis",
+        "license"
+      ],
+      "title": "Rights",
+      "type": "object"
+    },
+    "SafeHint": {
+      "additionalProperties": false,
+      "properties": {
+        "text": {
+          "const": "не забудь осмотреться",
+          "title": "Text",
+          "type": "string"
+        },
+        "status": {
+          "default": "draft",
+          "enum": [
+            "draft",
+            "reviewed"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "original": {
+          "const": true,
+          "title": "Original",
+          "type": "boolean"
+        },
+        "reviewer": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reviewer"
+        },
+        "trigger": {
+          "$ref": "#/$defs/FlagMapping"
+        }
+      },
+      "required": [
+        "text",
+        "original",
+        "trigger"
+      ],
+      "title": "SafeHint",
+      "type": "object"
+    },
+    "Source": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "url": {
+          "format": "uri",
+          "maxLength": 2083,
+          "minLength": 1,
+          "title": "Url",
+          "type": "string"
+        },
+        "attribution": {
+          "minLength": 1,
+          "title": "Attribution",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "url",
+        "attribution"
+      ],
+      "title": "Source",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "records": {
+      "items": {
+        "$ref": "#/$defs/Record"
+      },
+      "title": "Records",
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema_version",
+    "records"
+  ],
+  "title": "Catalog",
+  "type": "object"
+}
