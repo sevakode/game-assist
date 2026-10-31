@@ -1,5 +1,6 @@
 """Synthetic browser import parser/state tests; never reads a private save."""
 import json
+from html.parser import HTMLParser
 from pathlib import Path
 import shutil
 import subprocess
@@ -9,6 +10,35 @@ from decoders.belmont import decode_bytes, safe_summary
 
 ROOT = Path(__file__).resolve().parents[1]
 NODE = shutil.which('node')
+
+
+class SectionLinks(HTMLParser):
+    """Record link location and visible label, not an unrelated global href match."""
+    def __init__(self, source):
+        super().__init__()
+        self.sections = []
+        self.links = []
+        self.current = None
+        self.feed(source)
+
+    def handle_starttag(self, tag, attrs):
+        attrs = dict(attrs)
+        if tag == 'section':
+            self.sections.append(attrs.get('id'))
+        elif tag == 'a':
+            self.current = {'section': self.sections[-1] if self.sections else None,
+                            'href': attrs.get('href'), 'class': attrs.get('class', ''), 'text': ''}
+
+    def handle_data(self, text):
+        if self.current is not None:
+            self.current['text'] += text
+
+    def handle_endtag(self, tag):
+        if tag == 'a' and self.current is not None:
+            self.links.append(self.current)
+            self.current = None
+        elif tag == 'section' and self.sections:
+            self.sections.pop()
 
 
 class ManualImportUI(unittest.TestCase):
@@ -26,13 +56,27 @@ class ManualImportUI(unittest.TestCase):
         self.assertIn('До 2 МиБ', source)
         self.assertIn('data-permitted="no"', ui.manual_import_body('token', False))
 
-    def test_manual_source_labeled_and_link_only_on_supported_game(self):
+    def test_manual_source_labeled_and_import_cta_only_on_supported_game(self):
         source = ui.home_body({'games':[{'appid':4231820,'summary':{'player_scalars':{}},'summary_source':'browser_manual'}]}, 'csrf')
-        self.assertIn('Ручной импорт',source)
-        self.assertNotIn('Сводка от устройства',source)
-        self.assertIn('href="/import"',source)
-        source = ui.home_body({'games':[]},'csrf',capabilities={'selected_appid':292030})
-        self.assertNotIn('href="/import"',source)
+        self.assertIn('Ручной импорт', source)
+        self.assertNotIn('Сводка от устройства', source)
+        links = SectionLinks(source).links
+        primary = [link for link in links if link['href'] == '/import' and 'primary' in link['class'].split()]
+        self.assertEqual(len(primary), 1)
+        self.assertEqual(primary[0]['section'], 'context')
+        self.assertEqual(primary[0]['text'], 'Импортировать сводку')
+        for appid in (292030, 1245620):
+            with self.subTest(appid=appid):
+                source = ui.home_body({'games':[]}, 'csrf', capabilities={'selected_appid':appid})
+                links = [link for link in SectionLinks(source).links if link['href'] == '/import']
+                # Global Claude help may link to Belmont, never imply importing this game's progress.
+                self.assertEqual(len(links), 1)
+                self.assertEqual(links[0]['section'], 'assistant')
+                self.assertEqual(links[0]['text'], 'Импортировать Belmont')
+                self.assertNotIn('primary', links[0]['class'].split())
+                self.assertIn('Для Belmont’s Curse поддерживается ручной импорт формата 1.1.3', source)
+                self.assertIn('Проверь выбранную игру и её разрешения', source)
+                self.assertIn('Для этой игры нет проверенного декодера', source)
 
     @unittest.skipUnless(NODE, 'Node required for local browser JavaScript tests')
     def test_javascript_parser_and_state_machine(self):
@@ -56,3 +100,4 @@ class ManualImportUI(unittest.TestCase):
         result=subprocess.run([NODE,'-e',script],input=raw,cwd=ROOT,capture_output=True,text=True,timeout=10)
         self.assertEqual(result.returncode,0,result.stderr)
         self.assertEqual(json.loads(result.stdout),safe_summary(decode_bytes(raw.encode())))
+
