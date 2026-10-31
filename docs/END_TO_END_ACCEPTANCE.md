@@ -25,4 +25,4 @@ Claude remote connector: configure via supported web flow, then verify native mo
 12. **Cost:** record per-save/request bytes, idle request rate, DB size, rate limits, retries and monthly estimate at explicit user scale. 'Nearly free' is a target, not an unconditional promise.
 
 ## Current external blockers
-No public host/domain approved or deployed. No actual Steam Deck hardware test. No real Claude/ChatGPT connector setup or OAuth acceptance. No controlled before/after HP/mana pickup mapping yet. These gates remain open even when mocked tests pass.
+Owner-approved Render Free + Neon beta is live at https://game-assist.onrender.com; public HTTPS/health/OAuth metadata/download checks passed. No actual Steam Deck hardware test, real phone Steam callback, Claude/ChatGPT connector OAuth acceptance, or controlled before/after HP/mana pickup mapping has passed yet. These gates remain open even when automated tests pass.

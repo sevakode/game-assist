@@ -1,8 +1,6 @@
-# Remote companion: single-instance candidate, not a live service
+# Remote companion: experimental single-instance beta
 
-This is a separate service, not a switch to expose the old local API. No deployment,
-account, public URL, TLS certificate, Steam key or third-party connector is created.
-Only synthetic tests have been run. Phone + real Steam Deck acceptance is still required.
+This is a separate service, not a switch to expose the old local API. A beta deployment at https://game-assist.onrender.com has passed public HTTPS, health, metadata and download checks. PostgreSQL behavior is covered by real disposable database tests; Steam behavior in the automated suite is mocked. Phone OAuth and real Steam Deck acceptance are still required. No Steam Web API key or third-party AI connector has been configured by this deployment.
 
 ## Run after an operator supplies infrastructure
 
@@ -98,7 +96,7 @@ accept arbitrary client-supplied forwarding headers or wildcard proxy trust. A h
 with ephemeral disks is **not compatible** with this SQLite deployment: obtain
 persistent storage or implement and test a persistent database adapter first.
 
-## Render + Neon source preparation (not deployed)
+## Render + Neon beta deployment
 
 `render.yaml` is a source-only free-plan blueprint. Render mode binds the supplied
 `PORT` on `0.0.0.0`, but only after `GA_DEPLOYMENT_MODE=render` is explicitly set.
@@ -145,9 +143,10 @@ run the script from the repository root with the pinned driver installed. The su
 truncates all application tables in its disposable database. Its insecure local TLS
 override is restricted to loopback and is not available through service settings.
 
-Actual hosted Neon TLS, pooled-endpoint behavior, Render startup/cold starts, and
-live mobile OAuth/Steam Deck acceptance remain unverified deployment gates. Local
-PostgreSQL success is not a claim that those external integrations are complete.
+Hosted Neon TLS connectivity and Render startup have now been verified for the beta.
+Long-running pooled-endpoint behavior and repeated cold starts still need acceptance.
+Real phone Steam callbacks, AI-client OAuth and Steam Deck hardware remain unverified;
+automated tests and public endpoint checks do not establish those integrations.
 
 No existing SQLite-to-PostgreSQL data migration has been run. The first hosted
 installation should use a fresh database; migration of existing real accounts
@@ -177,6 +176,6 @@ download the ZIP, verify it, inspect source, and explicitly run setup. The comma
 chain stops on checksum failure. Pairing approval and background-service activation
 remain explicit. No page executes scripts or installs software automatically.
 
-The files and routes are prepared locally only; creating them does not publish a
-website or install anything on the user's Deck. Actual Desktop/Gaming Mode UX is
-still an external acceptance gate.
+The beta setup and download routes are public and verified, including the ZIP checksum.
+Publishing these files does not install anything on the user's Deck. Actual
+Desktop/Gaming Mode UX remains an external acceptance gate.
