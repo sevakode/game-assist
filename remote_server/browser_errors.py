@@ -7,7 +7,7 @@ from starlette.responses import PlainTextResponse
 from . import ui
 
 BROWSER_PATHS = frozenset({
-    '/', '/setup', '/import', '/login', '/steam/callback', '/devices/approve',
+    '/', '/games', '/connect/claude', '/setup', '/import', '/login', '/steam/callback', '/devices/approve',
     '/oauth/consent', '/account/games', '/account/games/add',
     '/account/games/permissions', '/account/games/revoke',
     '/account/achievements/refresh', '/account/library/permission', '/account/library/refresh', '/account/notifications',
@@ -40,7 +40,7 @@ def error_page(request, status):
               503: 'Возможность пока недоступна'}
     title = titles.get(status, 'Действие не завершено')
     detail = 'Вернись к игре и попробуй ещё раз. Сохранения на устройстве не изменяются.'
-    target, label = '/#library', 'К играм'
+    target, label = '/games#library', 'К играм'
     path = request.url.path
     if status == 401:
         detail = 'Сеанс завершился. Войди через Steam и повторно проверь выбранную игру и разрешения.'

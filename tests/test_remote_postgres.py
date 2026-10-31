@@ -87,7 +87,7 @@ class PostgresServiceTests(service_tests.RemoteTests):
         fresh=create_app(self.app.state.config,self.steam,database=fresh_db)
         with TestClient(fresh,base_url=service_tests.ORIGIN,follow_redirects=False) as client:
             client.cookies.update(self.client.cookies)
-            self.assertIn('Текущее здоровье',client.get('/').text)
+            self.assertIn('Текущее здоровье',client.get('/games').text)
             self.assertEqual(client.post('/v1/device/observations',json=body,headers={'authorization':'Bearer '+device}).json()['duplicate'],True)
             token=oauth_tests.run(fresh.state.provider.load_access_token(access))
             self.assertIsNotNone(token)

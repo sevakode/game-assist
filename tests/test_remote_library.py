@@ -67,14 +67,14 @@ class LibraryTests(unittest.TestCase):
         self.assertFalse(self.state()['enabled']);self.assertEqual(self.refresh().status_code,403)
 
     def test_site_controls_use_real_routes_and_cache_only(self):
-        self.sign_in();html=self.client.get('/').text
+        self.sign_in();html=self.client.get('/games').text
         self.assertIn('/account/library/permission',html)
         self.assertNotIn('/account/library/refresh',html)
         self.assertEqual(self.reader.calls,[])
-        self.permission();html=self.client.get('/').text
+        self.permission();html=self.client.get('/games').text
         self.assertIn('/account/library/refresh',html)
         self.assertEqual(self.reader.calls,[])
-        self.refresh();html=self.client.get('/').text
+        self.refresh();html=self.client.get('/games').text
         self.assertIn('Baldur',html);self.assertIn('name="appid" value="1086940"',html)
         self.assertIn('/account/games/add',html)
         self.permission('no')

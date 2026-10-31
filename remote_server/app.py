@@ -449,6 +449,22 @@ def create_app(config=None, steam=None, database=None, download_dir=None, achiev
         return JSONResponse({'status': 'ok'})
 
     async def home(request):
+        requested = request.query_params.get('game')
+        if requested is not None:
+            if not re.fullmatch(r'[1-9][0-9]{0,9}', requested) or int(requested) > 2147483647:
+                raise HTTPException(400, 'Invalid game')
+            return RedirectResponse('/games?' + urlencode({'game': requested}), 303)
+        try:
+            store.session(request, True)
+            signed_in = True
+        except HTTPException:
+            signed_in = False
+        return page('Играй. Открывай сам.', ui.welcome_panel(signed_in))
+
+    async def connect_claude(request):
+        return page('Подключить Claude', ui.claude_body(config.issuer + '/mcp'))
+
+    async def games(request):
         try:
             session = store.session(request, True)
         except HTTPException:
@@ -470,7 +486,7 @@ def create_app(config=None, steam=None, database=None, download_dir=None, achiev
 
     async def login(request):
         next_path = request.query_params.get('next', '/')
-        if next_path not in ('/', '/devices/approve', '/import') and not re.fullmatch(r'/oauth/consent\?request=[A-Za-z0-9_-]{43}', next_path):
+        if next_path not in ('/', '/games', '/devices/approve', '/import') and not re.fullmatch(r'/oauth/consent\?request=[A-Za-z0-9_-]{43}', next_path):
             raise HTTPException(400, 'Invalid continuation')
         raw, csrf, state = secrets.token_urlsafe(32), secrets.token_urlsafe(32), secrets.token_urlsafe(32)
         return_to = config.issuer + '/steam/callback?' + urlencode({'state': state})
@@ -725,7 +741,7 @@ def create_app(config=None, steam=None, database=None, download_dir=None, achiev
                 raise HTTPException(429,'Maximum 100 games per account')
             if appid not in CURRENT_GAME_IDS:
                 db.execute('INSERT INTO game_registrations(owner,appid,label,created) VALUES(?,?,?,?) ON CONFLICT(owner,appid) DO UPDATE SET label=excluded.label',(session['owner'],appid,label,time.time()))
-        return RedirectResponse('/#library',303)
+        return RedirectResponse('/games#library',303)
 
     async def choose_games(request):
         session=store.session(request,True)
@@ -759,7 +775,7 @@ def create_app(config=None, steam=None, database=None, download_dir=None, achiev
                 for scope,enabled in [('saves.metadata',appid in metadata),('saves.summary',appid==APPID and summary)]:
                     if enabled:db.execute('INSERT OR IGNORE INTO grants VALUES(?,?,?)',(session['owner'],appid,scope))
                     else:store.revoke_scope(db,session['owner'],appid,scope)
-        return RedirectResponse('/',303)
+        return RedirectResponse('/games',303)
 
     async def game_permission(request):
         session=store.session(request,True)
@@ -774,7 +790,7 @@ def create_app(config=None, steam=None, database=None, download_dir=None, achiev
         with store.db() as db:
             if not db.execute('SELECT 1 FROM game_selections WHERE owner=? AND appid=?',(session['owner'],appid)).fetchone():
                 raise HTTPException(403,'Select this game first')
-            request.state.browser_return='/?game='+str(appid)+'#permissions'
+            request.state.browser_return='/games?game='+str(appid)+'#permissions'
             if data['enabled']=='yes':
                 db.execute('INSERT OR IGNORE INTO grants VALUES(?,?,?)',(session['owner'],appid,scope))
                 if scope=='achievements.read':
@@ -784,7 +800,7 @@ def create_app(config=None, steam=None, database=None, download_dir=None, achiev
                             raise HTTPException(429,'Achievement cache capacity reached; revoke an unused achievement permission')
                     db.execute('INSERT INTO achievement_cache(owner,appid,consent_id) VALUES(?,?,?) ON CONFLICT(owner,appid) DO NOTHING',(session['owner'],appid,secrets.token_urlsafe(32)))
             else:store.revoke_scope(db,session['owner'],appid,scope)
-        return RedirectResponse('/?game='+str(appid)+'#permissions',303)
+        return RedirectResponse('/games?game='+str(appid)+'#permissions',303)
 
     async def library_permission(request):
         session=store.session(request,True)
@@ -798,7 +814,7 @@ def create_app(config=None, steam=None, database=None, download_dir=None, achiev
                     db.execute("UPDATE library_cache SET payload=NULL,status='expired' WHERE owner=?",(row['owner'],))
                 if not db.execute('SELECT 1 FROM library_cache WHERE owner=?',(session['owner'],)).fetchone() and db.execute('SELECT count(*) FROM library_cache').fetchone()[0]>=LIBRARY_ROWS_GLOBAL:raise HTTPException(429,'Library cache capacity reached')
                 db.execute('INSERT INTO library_cache(owner,consent_id) VALUES(?,?) ON CONFLICT(owner) DO NOTHING',(session['owner'],secrets.token_urlsafe(32)))
-        return RedirectResponse('/#steam-library',303)
+        return RedirectResponse('/games#steam-library',303)
 
     async def refresh_library(request):
         session=store.session(request,True)
@@ -825,7 +841,7 @@ def create_app(config=None, steam=None, database=None, download_dir=None, achiev
                 now=time.time()
                 db.execute('UPDATE library_cache SET payload=?,status=?,received_at=?,expires=?,refresh_nonce=NULL WHERE owner=?',(payload,status,now,now+86400,owner))
         finally:achievement_slots.release()
-        return RedirectResponse('/#steam-library',303)
+        return RedirectResponse('/games#steam-library',303)
 
     async def refresh_achievements(request):
         session=store.session(request,True)
@@ -840,7 +856,7 @@ def create_app(config=None, steam=None, database=None, download_dir=None, achiev
             with store.db() as db:
                 row=db.execute("SELECT c.*,u.steamid FROM achievement_cache c JOIN users u ON u.id=c.owner WHERE c.owner=? AND c.appid=? AND EXISTS(SELECT 1 FROM grants g WHERE g.owner=c.owner AND g.appid=c.appid AND g.scope='achievements.read') AND EXISTS(SELECT 1 FROM game_selections s WHERE s.owner=c.owner AND s.appid=c.appid)",(owner,appid)).fetchone()
                 if not row:raise HTTPException(403,'Current selected game and achievement permission required')
-                request.state.browser_return='/?game='+str(appid)+'#achievements'
+                request.state.browser_return='/games?game='+str(appid)+'#achievements'
                 store.expire_achievements(db)
                 now=time.time()
                 if row['attempted_at'] is not None and now-row['attempted_at']<900:raise HTTPException(429,'Refresh available after fifteen minutes')
@@ -856,7 +872,7 @@ def create_app(config=None, steam=None, database=None, download_dir=None, achiev
                 now=time.time()
                 db.execute('UPDATE achievement_cache SET payload=?,status=?,received_at=?,expires=?,refresh_nonce=NULL WHERE owner=? AND appid=?',(payload,status,now,now+86400,owner,appid))
         finally:achievement_slots.release()
-        return RedirectResponse('/?game='+str(appid)+'#achievements',303)
+        return RedirectResponse('/games?game='+str(appid)+'#achievements',303)
 
     async def revoke_selected_game(request):
         session=store.session(request,True)
@@ -867,7 +883,7 @@ def create_app(config=None, steam=None, database=None, download_dir=None, achiev
             if appid not in {g['appid'] for g in store.catalog(session['owner'],db)}:
                 raise HTTPException(404,'Game unavailable')
             store.revoke_game(db,session['owner'],appid,deselect=True)
-        return RedirectResponse('/',303)
+        return RedirectResponse('/games',303)
 
     async def notification_settings(request):
         session = store.session(request,True)
@@ -888,7 +904,7 @@ def create_app(config=None, steam=None, database=None, download_dir=None, achiev
             if not enabled:
                 db.execute('DELETE FROM notifications WHERE owner=? AND appid=?',(session['owner'],APPID))
             selected=db.execute('SELECT 1 FROM game_selections WHERE owner=? AND appid=?',(session['owner'],APPID)).fetchone()
-        return RedirectResponse('/?game='+str(APPID)+'#updates' if selected else '/#library',303)
+        return RedirectResponse('/games?game='+str(APPID)+'#updates' if selected else '/games#library',303)
 
     async def notification_read(request):
         session = store.session(request,True)
@@ -906,7 +922,7 @@ def create_app(config=None, steam=None, database=None, download_dir=None, achiev
                 (time.time(),data['notification_id'],session['owner'],time.time()-INBOX_TTL,session['owner'],'saves.summary')).fetchone()
             if not row:
                 raise HTTPException(404,'Notification unavailable')
-        return RedirectResponse('/?game='+str(APPID)+'#updates',303)
+        return RedirectResponse('/games?game='+str(APPID)+'#updates',303)
 
     async def revoke(request):
         session=store.session(request,True)
@@ -916,7 +932,7 @@ def create_app(config=None, steam=None, database=None, download_dir=None, achiev
                 db.execute(f'DELETE FROM {table} WHERE owner=?',(session['owner'],))
             db.execute('DELETE FROM pairings WHERE owner=?',(session['owner'],))
             provider.revoke_subject(session['owner'], connection=db)
-        return RedirectResponse('/',303)
+        return RedirectResponse('/games',303)
 
     async def logout(request):
         session=store.session(request,True)
@@ -935,7 +951,7 @@ def create_app(config=None, steam=None, database=None, download_dir=None, achiev
     app=mcp.streamable_http_app()
     app.add_exception_handler(HTTPException,browser_http_exception)
     app.routes.insert(0,Route('/.well-known/oauth-authorization-server',metadata))
-    app.routes.extend([Route('/import',manual_import_page),Route('/assets/import.js',import_script),Route('/assets/belmont-parser.js',parser_script),Route('/v1/browser/observations',manual_import,methods=['POST']),Route('/assets/console.css',stylesheet),Route('/setup',setup_page),Route('/downloads/deck-companion.zip',download),Route('/downloads/deck-companion.zip.sha256',download_checksum),Route('/healthz',health),Route('/',home),Route('/login',login),Route('/steam/callback',callback),
+    app.routes.extend([Route('/import',manual_import_page),Route('/assets/import.js',import_script),Route('/assets/belmont-parser.js',parser_script),Route('/v1/browser/observations',manual_import,methods=['POST']),Route('/assets/console.css',stylesheet),Route('/setup',setup_page),Route('/downloads/deck-companion.zip',download),Route('/downloads/deck-companion.zip.sha256',download_checksum),Route('/healthz',health),Route('/',home),Route('/games',games),Route('/connect/claude',connect_claude),Route('/login',login),Route('/steam/callback',callback),
         Route('/v1/devices/pair/start',pair_start,methods=['POST']),Route('/v1/devices/pair/poll',pair_poll,methods=['POST']),
         Route('/devices/approve',approve_device,methods=['GET','POST']),Route('/v1/device/observations',ingest,methods=['POST']),
         Route('/oauth/consent',consent,methods=['GET','POST']),Route('/account/library/permission',library_permission,methods=['POST']),Route('/account/library/refresh',refresh_library,methods=['POST']),Route('/account/achievements/refresh',refresh_achievements,methods=['POST']),Route('/account/games/add',add_game,methods=['POST']),Route('/account/games',choose_games,methods=['POST']),Route('/account/games/permissions',game_permission,methods=['POST']),Route('/account/games/revoke',revoke_selected_game,methods=['POST']),Route('/account/notifications',notification_settings,methods=['POST']),Route('/account/notifications/read',notification_read,methods=['POST']),Route('/account/revoke',revoke,methods=['POST']),Route('/logout',logout,methods=['POST'])])

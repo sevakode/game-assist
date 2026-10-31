@@ -30,13 +30,13 @@ class DiscoveryTests(unittest.TestCase):
 
     def test_public_focus_passes_discovery_without_writes(self):
         with patch('remote_server.app.ui.landing_body',return_value='public') as render:
-            self.assertEqual(self.client.get('/?game=1086940').status_code,200)
+            self.assertEqual(self.client.get('/games?game=1086940').status_code,200)
             self.assertEqual(render.call_args.kwargs['selected_appid'],1086940)
             self.assertEqual(len(render.call_args.kwargs['discovery_catalog']),17)
         with self.app.state.store.db() as db:
             for table in ('users','game_registrations','game_selections','grants'):
                 self.assertEqual(db.execute('SELECT count(*) FROM '+table).fetchone()[0],0)
-        self.assertEqual(self.client.get('/?game=999999').status_code,404)
+        self.assertEqual(self.client.get('/games?game=999999').status_code,404)
 
     def test_add_review_scoped_permissions_and_user_isolation(self):
         self.sign_in();self.assertEqual(len(self.catalog()),3)
@@ -63,4 +63,4 @@ class DiscoveryTests(unittest.TestCase):
         self.sign_in();self.add(1086940,'<custom>')
         game=next(g for g in self.catalog() if g['appid']==1086940)
         self.assertTrue(game['user_label_unverified']);self.assertEqual(game['name'],'<custom>')
-        self.assertIn('&lt;custom&gt;',self.client.get('/').text)
+        self.assertIn('&lt;custom&gt;',self.client.get('/games').text)

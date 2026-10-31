@@ -45,9 +45,9 @@ class UniversalGameTests(unittest.TestCase):
         custom=next(g for g in self.catalog() if g['appid']==999999)
         self.assertTrue(custom['user_label_unverified']);self.assertFalse(custom['summary_supported'])
         self.assertTrue(custom['metadata_supported']);self.assertEqual(custom['authorized_scopes'],[])
-        home=self.client.get('/').text
+        home=self.client.get('/games').text
         self.assertIn('&lt;script&gt;UNVERIFIED&lt;/script&gt;',home);self.assertNotIn('<script>UNVERIFIED',home)
-        self.choose([999999]);self.assertEqual(self.client.get('/?game=999999').status_code,200)
+        self.choose([999999]);self.assertEqual(self.client.get('/games?game=999999').status_code,200)
         self.assertEqual(self.permission(999999).status_code,422)
         first=self.owner();self.client.cookies.clear();self.sign_in('76561198000000002')
         self.assertNotIn(999999,{g['appid'] for g in self.catalog()})
@@ -138,8 +138,8 @@ class UniversalGameTests(unittest.TestCase):
         self.assertEqual(item['received_at'],item['metadata_received_at'])
 
     def test_public_presets_are_not_owned_library_and_focus_works(self):
-        public=self.client.get('/?game=1245620')
+        public=self.client.get('/games?game=1245620')
         self.assertEqual(public.status_code,200)
         self.assertIn('Elden Ring',public.text)
-        self.assertEqual(self.client.get('/?game=999999').status_code,404)
-        self.assertEqual(self.client.get('/?game=not-int').status_code,404)
+        self.assertEqual(self.client.get('/games?game=999999').status_code,404)
+        self.assertEqual(self.client.get('/games?game=not-int').status_code,404)

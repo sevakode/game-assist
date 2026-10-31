@@ -39,7 +39,7 @@ class GameSelectionTests(unittest.TestCase):
         return self.client.post('/account/games/revoke',data={'csrf':self.csrf(),'appid':str(appid)},headers={'origin':service_tests.ORIGIN})
 
     def test_visible_review_single_multiple_all_no_implicit_scope(self):
-        self.sign_in();home=self.client.get('/').text
+        self.sign_in();home=self.client.get('/games').text
         for name in ('Elden Ring','The Witcher 3','Castlevania'):
             self.assertIn(name,home)
         self.assertEqual(self.selected(),set())
@@ -112,13 +112,13 @@ class GameSelectionTests(unittest.TestCase):
         self.sign_in();self.choose([APPID,1245620],summary=True);first=self.owner()
         self.client.cookies.clear();self.sign_in('76561198000000002')
         self.assertEqual(self.selected(),set())
-        self.assertEqual(self.client.get('/?game=1245620').status_code,404)
+        self.assertEqual(self.client.get('/games?game=1245620').status_code,404)
         self.assertEqual(self.permission(owner=first).status_code,422)
         self.revoke(APPID)
         self.assertTrue(next(g for g in self.app.state.store.catalog(first) if g['appid']==APPID)['authorized'])
-        self.choose([292030]);self.assertEqual(self.client.get('/?game=292030').status_code,200)
-        self.assertEqual(self.client.get('/?game=999999').status_code,404)
-        self.assertEqual(self.client.get('/?game=not-int').status_code,400)
+        self.choose([292030]);self.assertEqual(self.client.get('/games?game=292030').status_code,200)
+        self.assertEqual(self.client.get('/games?game=999999').status_code,404)
+        self.assertEqual(self.client.get('/games?game=not-int').status_code,400)
 
     def test_unsupported_game_ingestion_and_pairing_rejected(self):
         self.sign_in();token=self.pair();self.choose(CURRENT_GAME_IDS,summary=True)

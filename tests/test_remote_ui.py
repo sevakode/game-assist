@@ -27,7 +27,7 @@ class ConsoleUITests(unittest.TestCase):
         self.assertEqual(elements.find('link', rel='stylesheet')[0]['href'], '/assets/console.css')
         self.assertEqual(elements.find('script'), [])
         self.assertNotIn('<unsafe>', source)
-        self.assertTrue(elements.find('a', href='/login'))
+        self.assertTrue(elements.find('a', href='/login?next=/games'))
         self.assertIn('Steam Cloud недоступен', source)
 
     def test_empty_home_does_not_offer_unavailable_toggle_or_fake_progress(self):
@@ -92,7 +92,7 @@ class ConsoleUITests(unittest.TestCase):
         self.assertIn('требует проверки на реальном Deck', source)
 
     def test_mcp_connection_is_real_readonly_and_escaped(self):
-        source = ui.home_body({'games':[]}, 'token', capabilities={'mcp_url':'https://assist.example/mcp'})
+        source = ui.claude_body('https://assist.example/mcp')
         elements = Elements(source)
         endpoint = elements.find('input', id='mcp-url')[0]
         self.assertIn('readonly', endpoint)
@@ -102,7 +102,7 @@ class ConsoleUITests(unittest.TestCase):
         self.assertFalse(elements.find('script'))
 
     def test_claude_guide_and_prompt_are_public_and_script_free(self):
-        source = ui.landing_body()
+        source = ui.claude_body(None)
         elements = Elements(source)
         prompt = elements.find('textarea', id='claude-prompt')
         self.assertEqual(len(prompt), 1)
@@ -126,24 +126,25 @@ class ConsoleUITests(unittest.TestCase):
 
     def test_claude_guide_escapes_configured_endpoint(self):
         value = 'https://selfhost.example/mcp?x="<tag>'
-        source = ui.landing_body(mcp_url=value)
+        source = ui.claude_body(value)
         self.assertEqual(Elements(source).find('input', id='mcp-url')[0]['value'], value)
         self.assertNotIn('<tag>', source)
         self.assertNotIn('game-assist.onrender.com', source)
 
     def test_claude_copied_prompt_uses_this_servers_full_links(self):
-        source = ui.landing_body(mcp_url='https://selfhost.example/base/mcp')
+        source = ui.claude_body('https://selfhost.example/base/mcp')
         self.assertIn('https://selfhost.example/base/import', source)
         self.assertIn('https://selfhost.example/base/setup', source)
         elements = Elements(source)
-        self.assertEqual(len(elements.find('section', id='assistant')), 1)
         self.assertEqual(len(elements.find('textarea', id='claude-prompt')), 1)
         self.assertEqual(len(elements.find('input', id='mcp-url')), 1)
 
     def test_claude_guide_available_without_selected_games(self):
         source = ui.home_body({'games':[]}, 'csrf', capabilities={'catalog':[], 'mcp_url':'https://selfhost.example/mcp'})
-        self.assertEqual(len(Elements(source).find('textarea', id='claude-prompt')), 1)
-        self.assertIn('Register automatically', source)
+        self.assertTrue(Elements(source).find('a', href='/connect/claude'))
+        guide = ui.claude_body('https://selfhost.example/mcp')
+        self.assertEqual(len(Elements(guide).find('textarea', id='claude-prompt')), 1)
+        self.assertIn('Register automatically', guide)
 
     def test_console_layout_has_real_controls_and_no_marketing_shell(self):
         source = ui.landing_body()
@@ -329,15 +330,15 @@ class ConsoleRedesignTests(unittest.TestCase):
         self.assertIn('Выбери первую игру',source)
         self.assertFalse(parsed.find('header',id='selected-game'))
         self.assertFalse(parsed.find('a',href='/devices/approve'))
-        self.assertTrue(parsed.find('a',href='/import'))  # Help link, not an import grant.
-        self.assertIn('Проверь выбранную игру и её разрешения', source)
+        self.assertFalse(parsed.find('a',href='/import'))
+        self.assertTrue(parsed.find('a',href='/connect/claude'))
         self.assertTrue(parsed.find('form',action='/account/games'))
         self.assertTrue(parsed.find('form',action='/logout'))
 
     def test_empty_device_selection_cannot_submit(self):
         parsed=Elements(ui.device_body('csrf',[]))
         self.assertTrue(any('disabled' in a for a in parsed.find('button')))
-        self.assertTrue(parsed.find('a',href='/#library'))
+        self.assertTrue(parsed.find('a',href='/games#library'))
         selected=Elements(ui.device_body('csrf',[{'appid':4231820,'selected':True}]))
         self.assertFalse(any('disabled' in a for a in selected.find('button')))
 
@@ -363,7 +364,7 @@ class ConsoleRedesignTests(unittest.TestCase):
         self.assertIn('Пока без декодера',source)
         public=Elements(ui.discovery_panel(games,set()))
         self.assertFalse(public.find('form'))
-        self.assertTrue(public.find('a',href='/?game=570#selected-game'))
+        self.assertTrue(public.find('a',href='/games?game=570#selected-game'))
 
     def test_public_curated_focus_and_local_original_art(self):
         source=ui.landing_body(570,[{'appid':570,'name':'Dota 2'}])
@@ -405,36 +406,29 @@ class ConsoleRedesignTests(unittest.TestCase):
 
 
 class FirstVisitTests(unittest.TestCase):
-    def test_guest_sees_purpose_and_real_start_before_game_settings(self):
-        source=ui.landing_body()
-        parsed=Elements(source)
-        self.assertIn('Игровая сводка для твоего AI-помощника',source)
-        self.assertTrue(parsed.find('a',href='/login'))
-        self.assertTrue(parsed.find('a',href='#library'))
-        self.assertLess(source.index('id="welcome-title"'),source.index('id="library"'))
-        self.assertEqual(source.count('class="start-steps"'),1)
-        self.assertIn('Войди через Steam',source)
-        self.assertIn('Выбери игру и разрешения',source)
-        self.assertIn('Импортируй сводку, затем подключи AI',source)
-        self.assertIn('не даёт доступ к облачным сейвам',source)
-        self.assertIn('Пример запроса после импорта Belmont и подключения AI',source)
-        self.assertIn('На этом сайте нет чата',source)
-        self.assertLess(source.index('class="welcome-prerequisites"'),source.index('Начать со Steam'))
-        self.assertIn('формата 1.1.3',source)
-        self.assertIn('для просмотра сайта он не требуется',source)
-        self.assertIn('Для других игр декодеров пока нет',source)
-        self.assertIn('Облачные сейвы не подключены',source)
-        self.assertEqual(len(parsed.find('textarea', id='claude-prompt')), 1)
-        self.assertIn('readonly', parsed.find('textarea', id='claude-prompt')[0])
-        self.assertFalse(parsed.find('input',placeholder='Сообщение'))
-
-    def test_first_visit_states_real_limitations_not_fake_coverage(self):
+    def test_guest_sees_minimal_purpose_and_real_start_without_game_settings(self):
         source=ui.welcome_panel()
-        self.assertIn('Файл разбирается в браузере без установки на Deck',source)
-        self.assertIn('Компаньон для Deck необязателен',source)
-        self.assertIn('Автоматическое получение облачных сейвов не работает',source)
-        self.assertIn('Помощник подключается отдельно',source)
-        self.assertIn('нет готовой полной базы прохождений',source)
+        parsed=Elements(source)
+        self.assertTrue(parsed.find('h1',id='entry-title'))
+        self.assertTrue(parsed.find('a',href='/login?next=/games'))
+        self.assertTrue(parsed.find('a',href='/connect/claude'))
+        self.assertTrue(parsed.find('a',href='/games#library'))
+        self.assertFalse(parsed.find('aside',id='library'))
+        self.assertFalse(parsed.find('header',id='selected-game'))
+        self.assertFalse(parsed.find('textarea'))
+        self.assertFalse(parsed.find('form'))
+        self.assertFalse(parsed.find('input',placeholder='Сообщение'))
+        self.assertIn('без сюжетных спойлеров',source)
+        self.assertIn('сводку сохранения',source)
+
+    def test_limitations_remain_inside_guide_not_root_wall(self):
+        source=ui.claude_body('https://assist.example/mcp')
+        self.assertIn('только четыре поля, не полное прохождение',source)
+        self.assertIn('формата 1.1.3',source)
+        self.assertIn('Вход в Steam не загружает сейвы из Cloud',source)
+        self.assertIn('Необязательный компаньон Deck',source)
+        self.assertIn('Готовой полной базы прохождений пока нет',source)
+        self.assertIn('сам сейв на сервер не отправляется',source)
         self.assertNotIn('100%',source)
         self.assertNotIn('автоматически получит все',source)
 

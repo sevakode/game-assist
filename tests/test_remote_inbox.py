@@ -138,7 +138,7 @@ class InboxTests(unittest.TestCase):
         self.assertEqual(css.status_code,200);self.assertTrue(css.headers['content-type'].startswith('text/css'))
         self.assertEqual(self.client.get('/assets/../app.py').status_code,404)
         self.prepared()
-        home=self.client.get('/')
+        home=self.client.get('/games')
         self.assertIn(NOTICE,home.text)
         self.assertIn('/account/notifications/read',home.text)
         self.assertIn('/account/notifications',home.text)

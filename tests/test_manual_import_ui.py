@@ -69,13 +69,16 @@ class ManualImportUI(unittest.TestCase):
             with self.subTest(appid=appid):
                 source = ui.home_body({'games':[]}, 'csrf', capabilities={'selected_appid':appid})
                 links = [link for link in SectionLinks(source).links if link['href'] == '/import']
-                # Global Claude help may link to Belmont, never imply importing this game's progress.
-                self.assertEqual(len(links), 1)
-                self.assertEqual(links[0]['section'], 'assistant')
-                self.assertEqual(links[0]['text'], 'Импортировать Belmont')
-                self.assertNotIn('primary', links[0]['class'].split())
-                self.assertIn('Для Belmont’s Curse поддерживается ручной импорт формата 1.1.3', source)
-                self.assertIn('Проверь выбранную игру и её разрешения', source)
+                # Unsupported games never expose an import CTA; shared help is separate.
+                self.assertEqual(links, [])
+                self.assertIn('href="/connect/claude"', source)
+                guide = ui.claude_body('https://assist.example/mcp')
+                fallback = [link for link in SectionLinks(guide).links if link['href'] == '/import']
+                self.assertEqual(len(fallback), 1)
+                self.assertEqual(fallback[0]['text'], 'Импортировать Belmont')
+                self.assertNotIn('primary', fallback[0]['class'].split())
+                self.assertIn('Для Belmont’s Curse поддерживается ручной импорт формата 1.1.3', guide)
+                self.assertIn('Проверь выбранную игру и её разрешения', guide)
                 self.assertIn('Для этой игры нет проверенного декодера', source)
 
     @unittest.skipUnless(NODE, 'Node required for local browser JavaScript tests')

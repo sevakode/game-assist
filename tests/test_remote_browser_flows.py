@@ -51,7 +51,7 @@ class BrowserFlowTests(unittest.TestCase):
 
     def test_public_games_navigation_and_all_local_get_targets_resolve(self):
         for appid in (4231820,1245620,292030):
-            response=self.client.get('/?game='+str(appid),headers=HTML)
+            response=self.client.get('/games?game='+str(appid),headers=HTML)
             self.assertEqual(response.status_code,200)
             for href in set(FormReader(response.text).links):
                 parsed=urlsplit(href)
@@ -66,7 +66,7 @@ class BrowserFlowTests(unittest.TestCase):
         page=self.post('/account/games',{'csrf':self.csrf(),'action':'review_all'})
         self.assertEqual(page.status_code,200)
         self.assertEqual(self.catalog(),initial) # Review does not mutate.
-        self.client.get('/#library',headers=HTML) # Cancel is navigation only.
+        self.client.get('/games#library',headers=HTML) # Cancel is navigation only.
         self.assertEqual(self.catalog(),initial)
         form=next(f for f in FormReader(page.text).forms if f['action']=='/account/games')
         response=self.post(form['action'],form['fields'])
@@ -80,7 +80,7 @@ class BrowserFlowTests(unittest.TestCase):
             for enabled in ('yes','no'):
                 response=self.permission(appid,scope='saves.metadata',enabled=enabled)
                 self.assertEqual(response.status_code,303)
-                self.assertEqual(response.headers['location'],f'/?game={appid}#permissions')
+                self.assertEqual(response.headers['location'],f'/games?game={appid}#permissions')
                 page=self.client.get(response.headers['location'],headers=HTML)
                 self.assertEqual(page.status_code,200)
                 self.assertIn(ui.GAMES[appid],page.text)
@@ -94,7 +94,7 @@ class BrowserFlowTests(unittest.TestCase):
         self.assertFalse(game['selected']);self.assertFalse(game['authorized_scopes'])
         self.assertEqual(self.choose([570]).status_code,303)
         self.assertEqual(self.permission(570,scope='saves.metadata').status_code,303)
-        page=self.client.get('/?game=570',headers=HTML)
+        page=self.client.get('/games?game=570',headers=HTML)
         self.assertEqual(page.status_code,200)
         self.assertIn('Synthetic local game',page.text)
         self.assertFalse(next(g for g in self.catalog() if g['appid']==570)['summary_supported'])
@@ -128,7 +128,7 @@ class BrowserFlowTests(unittest.TestCase):
         self.assertEqual(r.status_code,409)
         self.assertIn('Данные изменились',r.text)
         self.assertFalse(any(g['selected'] for g in self.catalog()))
-        self.assertIn('/#library',FormReader(r.text).links)
+        self.assertIn('/games#library',FormReader(r.text).links)
 
     def test_invalid_pair_code_can_retry_without_creating_device(self):
         self.sign_in();self.choose([4231820])
@@ -142,7 +142,7 @@ class BrowserFlowTests(unittest.TestCase):
 
     def test_disabled_achievement_action_is_truthful_and_recoverable(self):
         self.sign_in();self.choose([1245620])
-        page=self.client.get('/?game=1245620',headers=HTML)
+        page=self.client.get('/games?game=1245620',headers=HTML)
         self.assertIn('не настроен оператором',page.text)
         self.assertFalse(any(f['action']=='/account/achievements/refresh' for f in FormReader(page.text).forms))
         r=self.post('/account/achievements/refresh',{'csrf':self.csrf(),'appid':'1245620'})
@@ -168,14 +168,14 @@ class BrowserFlowTests(unittest.TestCase):
     def test_notification_controls_return_to_belmont_and_dedup_read(self):
         self.sign_in();token=self.pair();self.choose([4231820,1245620],summary=True)
         r=self.post('/account/notifications',{'csrf':self.csrf(),'appid':'4231820','enabled':'yes'})
-        self.assertEqual(r.headers['location'],'/?game=4231820#updates')
+        self.assertEqual(r.headers['location'],'/games?game=4231820#updates')
         data=self.observation()
         self.client.post('/v1/device/observations',json=data,headers={'authorization':'Bearer '+token})
         data=self.observation();data['payload']['player_scalars']['healthUpgradeFragmentCount']['value']=9
         self.client.post('/v1/device/observations',json=data,headers={'authorization':'Bearer '+token})
         item=self.app.state.store.inbox(self.owner())['items'][0]
         r=self.post('/account/notifications/read',{'csrf':self.csrf(),'notification_id':item['id']})
-        self.assertEqual(r.headers['location'],'/?game=4231820#updates')
+        self.assertEqual(r.headers['location'],'/games?game=4231820#updates')
         self.assertTrue(self.app.state.store.inbox(self.owner())['items'][0]['read'])
         self.assertEqual(self.post('/account/notifications/read',{'csrf':self.csrf(),'notification_id':item['id']}).status_code,303)
 
@@ -183,7 +183,7 @@ class BrowserFlowTests(unittest.TestCase):
         self.sign_in()
         response=self.post('/account/notifications',{'csrf':self.csrf(),'appid':'4231820','enabled':'no'})
         self.assertEqual(response.status_code,303)
-        self.assertEqual(response.headers['location'],'/#library')
+        self.assertEqual(response.headers['location'],'/games#library')
         self.assertEqual(self.client.get(response.headers['location'],headers=HTML).status_code,200)
 
     def test_logout_repeated_click_does_not_leave_broken_document(self):
@@ -194,7 +194,7 @@ class BrowserFlowTests(unittest.TestCase):
         self.assertIn('Нужно войти снова',r.text)
         guest=self.client.get('/')
         self.assertEqual(guest.status_code,200)
-        self.assertIn('href="/login">Начать со Steam',guest.text)
+        self.assertIn('href="/login?next=/games">Войти через Steam',guest.text)
         self.assertNotIn('Steam подключён',guest.text)
         self.assertNotIn('action="/account/revoke"',guest.text)
 
@@ -275,10 +275,10 @@ class BrowserFlowTests(unittest.TestCase):
 
     def test_unknown_selected_game_has_local_recovery_and_no_data(self):
         self.sign_in()
-        response=self.client.get('/?game=1245620',headers=HTML)
+        response=self.client.get('/games?game=1245620',headers=HTML)
         self.assertEqual(response.status_code,404)
         self.assertIn('Игра или страница недоступна',response.text)
-        self.assertIn('/#library',FormReader(response.text).links)
+        self.assertIn('/games#library',FormReader(response.text).links)
 
     def test_html_negotiation_does_not_override_nonbrowser_errors(self):
         def request(accept,path='/account/games'):
@@ -309,9 +309,9 @@ class AchievementBrowserFlowTests(unittest.TestCase):
         self.permission(1245620,scope='achievements.read')
         data={'csrf':self.csrf(),'appid':'1245620'}
         r=self.post('/account/achievements/refresh',data)
-        self.assertEqual(r.headers['location'],'/?game=1245620#achievements')
+        self.assertEqual(r.headers['location'],'/games?game=1245620#achievements')
         r=self.post('/account/achievements/refresh',data)
         self.assertEqual(r.status_code,429)
         self.assertIn('15 минут',r.text)
-        self.assertIn('/?game=1245620#achievements',FormReader(r.text).links)
+        self.assertIn('/games?game=1245620#achievements',FormReader(r.text).links)
         self.assertEqual(len(self.reader.calls),1)
