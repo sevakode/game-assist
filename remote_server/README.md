@@ -117,7 +117,7 @@ with `sslmode=require` must be strengthened and tested, not silently accepted.
 Do not paste connection strings in chats/logs or commit them. Enter a reviewed DSN
 only in the hosting provider's secret settings after account/setup authorization.
 
-All fourteen tables (sessions, login states, Steam nonce reservations, grants,
+All sixteen tables (sessions, login states, Steam nonce reservations, grants,
 pairings, device credentials, observations, events, rate buckets, and OAuth data)
 share one durable database. A transaction-scoped advisory lock preserves the
 single-instance serialized behavior across independent connections, including
@@ -179,3 +179,23 @@ remain explicit. No page executes scripts or installs software automatically.
 The beta setup and download routes are public and verified, including the ZIP checksum.
 Publishing these files does not install anything on the user's Deck. Actual
 Desktop/Gaming Mode UX remains an external acceptance gate.
+
+## Opt-in website inbox (implemented, device source only)
+
+Authenticated users with a current `saves.summary` game grant can explicitly enable
+inbox updates. Default is off. Only a known-to-known change in either raw fragment
+counter produces a neutral deterministic notice; current health/mana fluctuations
+do not. No item acquisition, completed upgrade or story progress is inferred.
+All four permitted values continue updating the strict projection.
+
+The first sample establishes a baseline, duplicate events/unchanged values do not
+notify, and notices within five minutes coalesce into one latest item. Coalescing
+rotates the item ID so stale forms cannot mark unseen newer updates read. Only the
+owner can mark an item read. Opt-out deletes notices and re-enabling takes a fresh
+baseline; global revoke removes settings/notices atomically with grants and tokens.
+
+Retention is 30 days, cleaned on inbox access or new qualifying notice, with at most
+50 items per owner. This is an on-site inbox, not outbound delivery: no background
+scheduler, LLM run, push notification, unsolicited assistant message or Steam Cloud
+source was added. The console-inspired server-rendered UI uses local CSS only and
+retains exact session/CSRF/origin boundaries. Database changes are additive tables.

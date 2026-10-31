@@ -22,7 +22,7 @@ import test_remote_oauth as oauth_tests
 import test_remote_service as service_tests
 
 DSN=os.environ.get('GA_TEST_POSTGRES_URL')
-TABLES='users,sessions,login_states,grants,pairings,devices,observations,events,limits,steam_nonces,oauth_clients,oauth_pending,oauth_codes,oauth_tokens'
+TABLES='notification_settings,notifications,users,sessions,login_states,grants,pairings,devices,observations,events,limits,steam_nonces,oauth_clients,oauth_pending,oauth_codes,oauth_tokens'
 
 
 def database():
@@ -87,7 +87,7 @@ class PostgresServiceTests(service_tests.RemoteTests):
         fresh=create_app(self.app.state.config,self.steam,database=fresh_db)
         with TestClient(fresh,base_url=service_tests.ORIGIN,follow_redirects=False) as client:
             client.cookies.update(self.client.cookies)
-            self.assertIn('currentHealth',client.get('/').text)
+            self.assertIn('Текущее здоровье',client.get('/').text)
             self.assertEqual(client.post('/v1/device/observations',json=body,headers={'authorization':'Bearer '+device}).json()['duplicate'],True)
             token=oauth_tests.run(fresh.state.provider.load_access_token(access))
             self.assertIsNotNone(token)
@@ -126,3 +126,10 @@ class PostgresServiceTests(service_tests.RemoteTests):
         with TestClient(fresh,base_url=service_tests.ORIGIN,follow_redirects=False) as client:
             client.get('/login'); params['state']=parse_qs(urlsplit(self.steam.return_to).query)['state'][0]
             self.assertEqual(client.get('/steam/callback',params=params).status_code,400)
+
+
+import test_remote_inbox as inbox_tests
+
+@unittest.skipUnless(DSN, 'Real local PostgreSQL DSN not supplied')
+class PostgresInboxTests(inbox_tests.InboxTests):
+    setUp=PostgresServiceTests.setUp

@@ -63,7 +63,7 @@ class DownloadTests(unittest.TestCase):
         missing=create_app(config,download_dir=self.root/'absent')
         with TestClient(missing,base_url=config.issuer) as client:
             self.assertEqual(client.get('/downloads/deck-companion.zip').status_code,503)
-            self.assertIn('not built yet',client.get('/setup').text)
+            self.assertIn('ещё не собран',client.get('/setup').text)
 
     def test_modified_archive_fails_closed_at_start(self):
         directory=self.root/'downloads';archive,_=build(ROOT,directory)

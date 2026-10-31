@@ -15,7 +15,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlencode, urlsplit
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from mcp.server.fastmcp import FastMCP
 from mcp.server.auth.middleware.auth_context import get_access_token
@@ -36,10 +36,16 @@ from server.app import SaveSummary
 from server.steam import SteamService, SteamError
 from .oauth import OAuthProvider
 from .database import Database
+from . import ui
 
 APPID = 4231820
 COOKIE = '__Host-ga_session'
 SCOPES = {'saves.summary', 'saves.metadata'}
+NOTICE = 'Компаньон сообщил об изменении разрешённых счётчиков сохранения. Получение предметов или улучшений не подтверждено.'
+NOTIFICATION_FIELDS = ('healthUpgradeFragmentCount','manaUpgradeFragmentCount')
+INBOX_TTL = 30 * 86400
+INBOX_LIMIT = 50
+INBOX_COALESCE = 300
 
 def digest(value):
     return hashlib.sha256(value.encode()).hexdigest()
@@ -115,6 +121,47 @@ class Store:
                                 'received_at': row['observed'] if row else None, 'observation_time': 'unknown'}]
         return result
 
+    def inbox(self, owner):
+        now = time.time()
+        with self.db() as db:
+            db.execute('DELETE FROM notifications WHERE created<?', (now-INBOX_TTL,))
+            permitted = bool(db.execute("SELECT 1 FROM grants WHERE owner=? AND appid=? AND scope='saves.summary'", (owner,APPID)).fetchone())
+            settings = db.execute('SELECT enabled FROM notification_settings WHERE owner=? AND appid=?', (owner,APPID)).fetchone()
+            rows = db.execute('SELECT id,created,read_at FROM notifications WHERE owner=? AND appid=? ORDER BY created DESC,id DESC LIMIT 50', (owner,APPID)).fetchall() if permitted else []
+        items = [{'id':row['id'], 'message':NOTICE, 'created_at':row['created'], 'read':row['read_at'] is not None} for row in rows]
+        return {'enabled':bool(permitted and settings and settings['enabled']), 'can_enable':permitted,
+                'unread_count':sum(not row['read'] for row in items), 'items':items,
+                'source':'device_companion', 'cloud_available':False, 'push_available':False}
+
+    @staticmethod
+    def record_notification(db, owner, appid, payload, event_key, now):
+        settings = db.execute('SELECT * FROM notification_settings WHERE owner=? AND appid=? AND enabled=1', (owner,appid)).fetchone()
+        if not settings:
+            return
+        # Validate both projections; corrupt/old baselines establish a new baseline
+        # rather than inventing progress. No raw source strings enter the notice.
+        current = SaveSummary.model_validate_json(payload).player_scalars.model_dump()
+        try:
+            previous = SaveSummary.model_validate_json(settings['baseline']).player_scalars.model_dump() if settings['baseline'] else None
+        except (ValidationError,ValueError,TypeError):
+            previous = None
+        db.execute('UPDATE notification_settings SET baseline=?,updated=? WHERE owner=? AND appid=?', (payload,now,owner,appid))
+        changed = previous is not None and any(previous[field]['status']=='known' and value['status']=='known' and previous[field]['value'] != value['value'] for field,value in current.items() if field in NOTIFICATION_FIELDS)
+        if not changed:
+            return
+        db.execute('DELETE FROM notifications WHERE created<?', (now-INBOX_TTL,))
+        key = digest(str(settings['epoch'])+':'+event_key)
+        if db.execute('SELECT 1 FROM notifications WHERE owner=? AND appid=? AND event_key=?',(owner,appid,key)).fetchone():
+            return
+        latest = db.execute('SELECT id FROM notifications WHERE owner=? AND appid=? AND created>? ORDER BY created DESC,id DESC LIMIT 1',(owner,appid,now-INBOX_COALESCE)).fetchone()
+        if latest:
+            # Rotate the item ID so a stale browser form cannot mark a newer
+            # coalesced change as read without having seen that version.
+            db.execute('UPDATE notifications SET id=?,event_key=?,created=?,read_at=NULL WHERE id=? AND owner=?',(str(uuid4()),key,now,latest['id'],owner))
+        else:
+            db.execute('INSERT INTO notifications VALUES(?,?,?,?,?,NULL)',(str(uuid4()),owner,appid,key,now))
+        db.execute('DELETE FROM notifications WHERE owner=? AND id NOT IN (SELECT id FROM notifications WHERE owner=? ORDER BY created DESC,id DESC LIMIT 50)',(owner,owner))
+
 class Boundary:
     """Bound body sizes before SDK parsing; exact raw redirect/resource validation."""
     def __init__(self, app, config, store):
@@ -172,7 +219,7 @@ class Boundary:
             if message['type'] == 'http.response.start':
                 message['headers'] = [(k,v) for k,v in message['headers'] if k.lower() not in (b'access-control-allow-origin', b'cache-control')]
                 message['headers'] += [(b'cache-control', b'no-store'), (b'referrer-policy', b'no-referrer'),
-                    (b'x-content-type-options', b'nosniff'), (b'content-security-policy', b"default-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"),
+                    (b'x-content-type-options', b'nosniff'), (b'content-security-policy', b"default-src 'none'; style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"),
                     (b'strict-transport-security', b'max-age=31536000')]
             await send(message)
         return await self.app(scope, replay, secure)
@@ -192,7 +239,7 @@ async def json_body(request):
         raise HTTPException(422, 'JSON object required') from None
 
 def page(title, body):
-    return HTMLResponse('<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>' + html.escape(title) + '</title><h1>' + html.escape(title) + '</h1>' + body + '</html>')
+    return ui.page(title, body)
 
 def hidden(name, value):
     return f'<input type="hidden" name="{html.escape(name)}" value="{html.escape(value, quote=True)}">'
@@ -261,9 +308,12 @@ def create_app(config=None, steam=None, database=None, download_dir=None):
 
     async def setup_page(request):
         if archive_checksum is None:
-            return page('Set up your Steam Deck', '<p>The code-only download is not built yet. No installation is available from this service.</p>')
+            return page('Настройка Deck', ui.setup_body(config.issuer,None))
         command = "cd ~/Downloads &&\n" + "printf '%s  deck-companion.zip\\n' " + shlex.quote(archive_checksum) + " | sha256sum -c - &&\n" + "mkdir deck-companion &&\npython3 -I -m zipfile -e deck-companion.zip deck-companion &&\ncd deck-companion &&\npython3 -m deck setup --server " + shlex.quote(config.issuer)
-        return page('Set up your Steam Deck', '<p>On the Deck switch once to Desktop Mode and open this page in its browser: <code>'+html.escape(config.issuer+'/setup')+'</code>. No ChatGPT login on the Deck is needed.</p><p>Requirements: Python 3.10+, its venv module, and an active systemctl --user session. Standard-library source only; no pip packages or downloaded binaries. If prerequisites are missing, stop: do not use sudo or disable SteamOS protections.</p><p><a href="/downloads/deck-companion.zip">Download Deck source ZIP</a> · <a href="/downloads/deck-companion.zip.sha256">SHA256 file</a></p><p>Save as deck-companion.zip in Downloads. Inspect the source and the following commands; nothing runs automatically. In Konsole verify the checksum first; continue only if it says OK, then extract and explicitly run setup.</p><pre>'+html.escape(command)+'</pre><p>SHA256: <code>'+archive_checksum+'</code></p><p>Choose the save path explicitly. On your phone sign in with Steam at the pairing URL, compare the code shown on your own Deck, select AppID 4231820 and the permitted four-field summary, and approve. Setup asks before enabling the background user service. No saves are changed. Gaming Mode persistence still needs real-Deck validation; pairing currently expires after 30 days.</p><p>Connect your phone assistant separately after setup. Free hosting can take about a minute to wake.</p>')
+        return page('Настройка Deck', ui.setup_body(config.issuer,archive_checksum,command))
+
+    async def stylesheet(request):
+        return FileResponse(Path(__file__).parent/'ui.css',media_type='text/css')
 
     async def health(request):
         return JSONResponse({'status': 'ok'})
@@ -272,9 +322,9 @@ def create_app(config=None, steam=None, database=None, download_dir=None):
         try:
             session = store.session(request, True)
         except HTTPException:
-            return page('Game Assist', '<p>Link your Steam account. No Steam password is entered here.</p><a href="/login">Sign in with Steam</a><p><a href="/setup">Set up your Steam Deck</a></p>')
-        csrf = hidden('csrf', session['csrf'])
-        return page('Your Game Assist', '<p>Strict spoiler protection. Only four reported raw values; not maximum HP/mana or pickup completion.</p><pre>' + html.escape(json.dumps(store.projection(session['owner']), indent=2)) + '</pre><a href="/setup">Set up your Steam Deck</a> · <a href="/devices/approve">Pair a Steam Deck</a><form method="post" action="/account/revoke">' + csrf + '<button>Revoke all game/device access</button></form><form method="post" action="/logout">' + csrf + '<button>Sign out</button></form>')
+            return page('Игровой спутник', ui.landing_body())
+        inbox = store.inbox(session['owner'])
+        return page('Твоя игровая станция', ui.home_body(store.projection(session['owner']),session['csrf'],inbox,capabilities={'mcp_url':config.issuer+'/mcp'}))
 
     async def login(request):
         next_path = request.query_params.get('next', '/')
@@ -376,7 +426,7 @@ def create_app(config=None, steam=None, database=None, download_dir=None):
                 return RedirectResponse('/login?' + urlencode({'next':'/devices/approve'}),303)
             raise
         if request.method == 'GET':
-            return page('Approve your Steam Deck', '<p>Enter only the code shown on your own Deck. Never approve an unsolicited code. Select the game and the facts you allow to leave it. ChatGPT/Claude may read permitted facts after separate OAuth consent.</p><form method="post">' + hidden('csrf',session['csrf']) + '<label>Device code <input name="user_code" maxlength="8" required></label><label>Game <select name="appid"><option value="">Choose</option><option value="4231820">Castlevania: Belmont’s Curse</option></select></label><label><input type="checkbox" name="saves.summary" value="yes">Four raw player values (not max HP/mana)</label><label><input type="checkbox" name="saves.metadata" value="yes">Save metadata (no remote ingestion yet)</label><button>Approve this device</button></form>')
+            return page('Подключить Deck', ui.device_body(session['csrf']))
         data = await form(request, session, config.issuer)
         store.limit('approve:'+session['owner'], 10)
         if set(data)-{'csrf','user_code','appid',*SCOPES} or data.get('appid')!=str(APPID):
@@ -394,7 +444,7 @@ def create_app(config=None, steam=None, database=None, download_dir=None):
                 raise HTTPException(400, 'Invalid or expired device code')
             for s in scopes:
                 db.execute('INSERT OR IGNORE INTO grants VALUES(?,?,?)', (session['owner'],APPID,s))
-        return page('Device approved', '<p>Return to your Deck. You can revoke access on the account page.</p><a href="/">Account</a>')
+        return page('Устройство подключено', ui.approved_body())
 
     async def ingest(request):
         bearer = request.headers.get('authorization','')
@@ -427,7 +477,9 @@ def create_app(config=None, steam=None, database=None, download_dir=None):
                 if db.execute('SELECT count(*) FROM events WHERE device_hash=?', (key,)).fetchone()[0] >= 10000:
                     raise HTTPException(429, 'Device event quota reached; re-pair required')
                 db.execute('INSERT INTO events VALUES(?,?,?,?,?)', (device['owner'],key,data['event_id'],time.time(),digest(payload)))
-                db.execute('INSERT OR REPLACE INTO observations VALUES(?,?,?,?)', (device['owner'],APPID,payload,time.time()))
+                now = time.time()
+                db.execute('INSERT OR REPLACE INTO observations VALUES(?,?,?,?)', (device['owner'],APPID,payload,now))
+                store.record_notification(db,device['owner'],APPID,payload,key+':'+data['event_id'],now)
         return JSONResponse({'accepted':True,'duplicate':duplicate})
 
     async def consent(request):
@@ -447,7 +499,7 @@ def create_app(config=None, steam=None, database=None, download_dir=None):
                 raise HTTPException(400, 'Expired authorization request')
             client = await provider.get_client(pending['client_id'])
             client_label = ((client.client_name or 'Unnamed client') + ' — ' + pending['redirect_uri']) if client else 'Unknown client'
-            return page('Connect your assistant', '<p>Allow this client to read your currently permitted game summaries? Facts returned to the assistant leave this service. No raw saves or Steam identity are provided.</p><p>Client: '+html.escape(client_label)+'</p><form method="post">'+hidden('csrf',session['csrf'])+hidden('request',req)+'<button>Allow read-only progress</button></form>')
+            return page('Подключить помощника', ui.consent_body(session['csrf'],req,client_label))
         data = await form(request,session,config.issuer)
         try:
             target = provider.approve(str(data.get('request','')),session['owner'])
@@ -455,11 +507,49 @@ def create_app(config=None, steam=None, database=None, download_dir=None):
             raise HTTPException(400, 'Expired authorization request') from None
         return RedirectResponse(target,303)
 
+    async def notification_settings(request):
+        session = store.session(request,True)
+        data = await form(request,session,config.issuer)
+        if set(data) != {'csrf','appid','enabled'} or data.get('appid') != str(APPID) or data.get('enabled') not in ('yes','no'):
+            raise HTTPException(422,'Explicit game and notification choice required')
+        enabled = data['enabled']=='yes'
+        with store.db() as db:
+            if enabled and not db.execute("SELECT 1 FROM grants WHERE owner=? AND appid=? AND scope='saves.summary'",(session['owner'],APPID)).fetchone():
+                raise HTTPException(403,'Current game permission required')
+            previous = db.execute('SELECT enabled,epoch FROM notification_settings WHERE owner=? AND appid=?',(session['owner'],APPID)).fetchone()
+            # Repeated identical choice is idempotent, not a new consent epoch.
+            if not previous or bool(previous['enabled']) != enabled:
+                row = db.execute('SELECT payload FROM observations WHERE owner=? AND appid=?',(session['owner'],APPID)).fetchone() if enabled else None
+                epoch = previous['epoch']+1 if previous else 1
+                db.execute('INSERT INTO notification_settings(owner,appid,enabled,baseline,epoch,updated) VALUES(?,?,?,?,?,?) ON CONFLICT(owner,appid) DO UPDATE SET enabled=excluded.enabled,baseline=excluded.baseline,epoch=excluded.epoch,updated=excluded.updated',
+                    (session['owner'],APPID,int(enabled),row['payload'] if row else None,epoch,time.time()))
+            if not enabled:
+                db.execute('DELETE FROM notifications WHERE owner=? AND appid=?',(session['owner'],APPID))
+        return RedirectResponse('/',303)
+
+    async def notification_read(request):
+        session = store.session(request,True)
+        data = await form(request,session,config.issuer)
+        if set(data) != {'csrf','notification_id'}:
+            raise HTTPException(422,'Notification ID required')
+        try:
+            if len(data['notification_id']) != 36:
+                raise ValueError()
+            UUID(data['notification_id'])
+        except (ValueError,TypeError,AttributeError):
+            raise HTTPException(422,'Invalid notification ID') from None
+        with store.db() as db:
+            row = db.execute('UPDATE notifications SET read_at=? WHERE id=? AND owner=? AND created>=? AND EXISTS(SELECT 1 FROM grants WHERE owner=? AND appid=notifications.appid AND scope=?) RETURNING id',
+                (time.time(),data['notification_id'],session['owner'],time.time()-INBOX_TTL,session['owner'],'saves.summary')).fetchone()
+            if not row:
+                raise HTTPException(404,'Notification unavailable')
+        return RedirectResponse('/',303)
+
     async def revoke(request):
         session=store.session(request,True)
         await form(request,session,config.issuer)
         with store.db() as db:
-            for table in ('grants','devices','observations','events'):
+            for table in ('grants','devices','observations','events','notification_settings','notifications'):
                 db.execute(f'DELETE FROM {table} WHERE owner=?',(session['owner'],))
             db.execute('DELETE FROM pairings WHERE owner=?',(session['owner'],))
             provider.revoke_subject(session['owner'], connection=db)
@@ -481,10 +571,10 @@ def create_app(config=None, steam=None, database=None, download_dir=None):
 
     app=mcp.streamable_http_app()
     app.routes.insert(0,Route('/.well-known/oauth-authorization-server',metadata))
-    app.routes.extend([Route('/setup',setup_page),Route('/downloads/deck-companion.zip',download),Route('/downloads/deck-companion.zip.sha256',download_checksum),Route('/healthz',health),Route('/',home),Route('/login',login),Route('/steam/callback',callback),
+    app.routes.extend([Route('/assets/console.css',stylesheet),Route('/setup',setup_page),Route('/downloads/deck-companion.zip',download),Route('/downloads/deck-companion.zip.sha256',download_checksum),Route('/healthz',health),Route('/',home),Route('/login',login),Route('/steam/callback',callback),
         Route('/v1/devices/pair/start',pair_start,methods=['POST']),Route('/v1/devices/pair/poll',pair_poll,methods=['POST']),
         Route('/devices/approve',approve_device,methods=['GET','POST']),Route('/v1/device/observations',ingest,methods=['POST']),
-        Route('/oauth/consent',consent,methods=['GET','POST']),Route('/account/revoke',revoke,methods=['POST']),Route('/logout',logout,methods=['POST'])])
+        Route('/oauth/consent',consent,methods=['GET','POST']),Route('/account/notifications',notification_settings,methods=['POST']),Route('/account/notifications/read',notification_read,methods=['POST']),Route('/account/revoke',revoke,methods=['POST']),Route('/logout',logout,methods=['POST'])])
     app.add_middleware(Boundary,config=config,store=store)
     app.add_middleware(TrustedHostMiddleware,allowed_hosts=[urlsplit(config.issuer).hostname])
     app.state.store,app.state.provider,app.state.config=store,provider,config

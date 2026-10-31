@@ -10,6 +10,10 @@ CREATE TABLE IF NOT EXISTS observations(owner TEXT NOT NULL,appid INTEGER NOT NU
 CREATE TABLE IF NOT EXISTS events(owner TEXT NOT NULL,device_hash TEXT NOT NULL,event_id TEXT NOT NULL,created REAL NOT NULL,payload_hash TEXT NOT NULL,PRIMARY KEY(device_hash,event_id));
 CREATE TABLE IF NOT EXISTS limits(bucket TEXT PRIMARY KEY,start REAL NOT NULL,count INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS steam_nonces(nonce_hash TEXT PRIMARY KEY,expires REAL NOT NULL);
+CREATE TABLE IF NOT EXISTS notification_settings(owner TEXT NOT NULL,appid INTEGER NOT NULL,enabled INTEGER NOT NULL,baseline TEXT,epoch INTEGER NOT NULL,updated REAL NOT NULL,PRIMARY KEY(owner,appid));
+CREATE TABLE IF NOT EXISTS notifications(id TEXT PRIMARY KEY,owner TEXT NOT NULL,appid INTEGER NOT NULL,event_key TEXT NOT NULL,created REAL NOT NULL,read_at REAL,UNIQUE(owner,appid,event_key));
+CREATE INDEX IF NOT EXISTS notifications_owner_created ON notifications(owner,created);
+CREATE INDEX IF NOT EXISTS notifications_expiry ON notifications(created);
 CREATE TABLE IF NOT EXISTS oauth_clients(id TEXT PRIMARY KEY,data TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS oauth_pending(id TEXT PRIMARY KEY,data TEXT NOT NULL,expires REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS oauth_codes(hash TEXT PRIMARY KEY,data TEXT NOT NULL,expires REAL NOT NULL);
