@@ -37,7 +37,7 @@ class MinimalHomeRoutes(unittest.TestCase):
             self.assertNotIn(title,response.text)
         self.assertLess(len(' '.join(doc.text).split()),240)
         self.assertTrue(doc.find('a',href='/connect'))
-        self.assertTrue(any(a.get('id')=='assistant' for _,a in doc.elements))
+        self.assertEqual(len(doc.find('a', **{'class':'button primary'})), 1)
         self.assertTrue(any(a.get('id')=='library' for _,a in doc.elements))
         self.assertNotIn('script-src',response.headers['content-security-policy'])
 

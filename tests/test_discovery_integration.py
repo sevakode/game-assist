@@ -49,7 +49,7 @@ class DiscoveryIntegration(unittest.TestCase):
         self.assertEqual(links[0]['class'],'button primary')
         self.assertFalse(doc.find('button'))
         home=Head(self.client.get('/').text)
-        self.assertTrue(home.find('a',href='/connect',id='assistant'))
+        self.assertTrue(home.find('a',href='/login?next=/games', **{'class':'button primary'}))
         self.assertFalse(home.find('textarea'))
 
     def test_optional_tools_do_not_disable_working_progress_or_infer_current_game(self):

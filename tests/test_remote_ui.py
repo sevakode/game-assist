@@ -141,7 +141,7 @@ class ConsoleUITests(unittest.TestCase):
 
     def test_claude_guide_available_without_selected_games(self):
         source = ui.home_body({'games':[]}, 'csrf', capabilities={'catalog':[], 'mcp_url':'https://selfhost.example/mcp'})
-        self.assertTrue(Elements(source).find('a', href='/connect'))
+        self.assertTrue(Elements(source).find('a', href='/start'))
         guide = ui.claude_body('https://selfhost.example/mcp')
         self.assertEqual(len(Elements(guide).find('textarea', id='claude-prompt')), 1)
         self.assertIn('Register automatically', guide)
@@ -331,7 +331,7 @@ class ConsoleRedesignTests(unittest.TestCase):
         self.assertFalse(parsed.find('header',id='selected-game'))
         self.assertFalse(parsed.find('a',href='/devices/approve'))
         self.assertFalse(parsed.find('a',href='/import'))
-        self.assertTrue(parsed.find('a',href='/connect'))
+        self.assertFalse(parsed.find('a',href='/connect'))
         self.assertTrue(parsed.find('form',action='/account/games'))
         self.assertTrue(parsed.find('form',action='/logout'))
 
@@ -411,7 +411,7 @@ class FirstVisitTests(unittest.TestCase):
         parsed=Elements(source)
         self.assertTrue(parsed.find('h1',id='entry-title'))
         self.assertTrue(parsed.find('a',href='/login?next=/games'))
-        self.assertTrue(parsed.find('a',href='/connect'))
+        self.assertFalse(parsed.find('a',href='/connect'))
         self.assertTrue(parsed.find('a',href='/games#library'))
         self.assertFalse(parsed.find('aside',id='library'))
         self.assertFalse(parsed.find('header',id='selected-game'))
@@ -419,7 +419,7 @@ class FirstVisitTests(unittest.TestCase):
         self.assertFalse(parsed.find('form'))
         self.assertFalse(parsed.find('input',placeholder='Сообщение'))
         self.assertIn('без сюжетных спойлеров',source)
-        self.assertIn('сводку сохранения',source)
+        self.assertIn('Привязать Steam',source)
 
     def test_limitations_remain_inside_guide_not_root_wall(self):
         source=ui.claude_body('https://assist.example/mcp')

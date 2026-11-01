@@ -89,7 +89,7 @@ def connect_body(issuer: str) -> str:
 
 def connect_page(issuer: str) -> HTMLResponse:
     meta = public_metadata(issuer, '/connect')
-    return HTMLResponse(f'''<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="dark"><title>{escape(meta['title'])}</title>{public_head(issuer, '/connect')}<link rel="stylesheet" href="/assets/console.css"></head><body><a class="skip" href="#main">К содержимому</a><div class="shell"><header class="topbar"><a class="brand" href="/">Game Assist</a></header><main id="main">{connect_body(issuer)}</main></div></body></html>''')
+    return HTMLResponse(f'''<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="dark"><title>{escape(meta['title'])}</title>{public_head(issuer, '/connect')}<link rel="stylesheet" href="/assets/console.css"></head><body><a class="skip" href="#main">К содержимому</a><div class="shell"><header class="topbar"><a class="brand" href="/">Game Assist</a></header><main id="main">{connect_body(issuer)}</main><footer><a class="plain-link" href="/data-handling">Как обрабатываются данные</a></footer></div></body></html>''')
 
 
 def robots_txt(issuer: str) -> str:

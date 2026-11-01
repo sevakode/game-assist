@@ -194,7 +194,7 @@ class BrowserFlowTests(unittest.TestCase):
         self.assertIn('Нужно войти снова',r.text)
         guest=self.client.get('/')
         self.assertEqual(guest.status_code,200)
-        self.assertIn('href="/login?next=/games">Войти через Steam',guest.text)
+        self.assertIn('href="/login?next=/games">Привязать Steam',guest.text)
         self.assertNotIn('Steam подключён',guest.text)
         self.assertNotIn('action="/account/revoke"',guest.text)
 

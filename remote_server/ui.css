@@ -23,3 +23,24 @@
 
 .entry h1 span{white-space:nowrap}.entry-copy>.entry-beta{margin-top:24px;max-width:340px}.entry-copy>.entry-beta>span{font-size:9px;margin-bottom:3px}.entry-bottom{justify-content:flex-end}.entry-copy>.entry-beta{font-size:11px}
 @media(max-width:600px){.entry-copy>.entry-eyebrow{display:none}.entry{padding-top:28px}.entry-copy>.entry-beta{margin-top:18px}}
+
+/* A route is an instruction, never evidence of an installed connector. */
+.onboarding{max-width:600px;padding-bottom:24px;overflow-wrap:anywhere}
+.onboarding>p,.onboarding>blockquote{margin:20px 0;line-height:1.7}
+.onboarding .step-count{font-size:12px;color:var(--muted);letter-spacing:1px}
+.onboarding label{display:block;margin:22px 0 8px}
+.onboarding input,.onboarding textarea{display:block;box-sizing:border-box;width:100%;max-width:100%;font:inherit;font-size:14px;padding:14px;background:var(--surface);color:var(--ink);border:1px solid var(--line);border-radius:10px}
+.onboarding textarea{resize:vertical;min-height:160px}
+.onboarding button{margin-top:12px;min-height:44px}
+.onboarding .primary{display:flex;justify-content:center;min-height:52px;margin:28px 0;border-radius:12px;box-shadow:0 4px 0 #152018}
+.onboarding details{border-top:1px solid var(--line);margin-top:24px;padding-top:10px}
+.onboarding summary{min-height:44px;cursor:pointer}
+.onboarding details p{margin:14px 0}
+.onboarding details a{display:inline-block;min-height:44px;padding:10px 0}
+.onboarding blockquote{border-left:3px solid var(--focus);padding-left:18px}
+.onboarding :focus-visible{outline:3px solid var(--focus);outline-offset:4px}
+.onboarding [hidden]{display:none}
+@media(max-width:430px){.onboarding h1{font-size:30px}.onboarding{margin-top:20px}.onboarding>p{font-size:15px}.onboarding .primary{width:100%}}
+/* Keep the first-run controls clear of the fixed console navigation. */
+body:has(.onboarding) .system-nav{position:static}
+body:has(.onboarding) .shell{padding-bottom:24px}

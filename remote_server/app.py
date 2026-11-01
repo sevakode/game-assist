@@ -303,7 +303,7 @@ class Boundary:
             if message['type'] == 'http.response.start':
                 message['headers'] = [(k,v) for k,v in message['headers'] if k.lower() not in (b'access-control-allow-origin', b'cache-control')]
                 message['headers'] += [(b'cache-control', b'no-store'), (b'referrer-policy', b'no-referrer'),
-                    (b'x-content-type-options', b'nosniff'), (b'content-security-policy', (b"default-src 'none'; style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'" + (b"; script-src 'self'; connect-src 'self'" if scope['path']=='/import' else b''))),
+                    (b'x-content-type-options', b'nosniff'), (b'content-security-policy', (b"default-src 'none'; style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'" + (b"; script-src 'self'; connect-src 'self'" if scope['path']=='/import' else b"; script-src 'self'" if scope['path']=='/start' else b''))),
                     (b'strict-transport-security', b'max-age=31536000')]
             await send(message)
         async def reject(data, status):
@@ -501,6 +501,15 @@ def create_app(config=None, steam=None, database=None, download_dir=None, achiev
         except HTTPException:
             signed_in = False
         return page('Играй. Открывай сам.', ui.welcome_panel(signed_in), head=discovery.public_head(config.issuer, '/'))
+
+    async def onboarding(request):
+        step = request.query_params.get('step', 'connect')
+        if step not in ('connect', 'choose', 'play'):
+            raise HTTPException(400, 'Invalid onboarding step')
+        return page('Начать играть', ui.start_body(config.issuer + '/mcp', step))
+
+    async def onboarding_script(request):
+        return PlainTextResponse((Path(__file__).with_name('onboarding.js')).read_text(), media_type='application/javascript')
 
     async def connect_claude(request):
         return page('Подключить Claude', ui.claude_body(config.issuer + '/mcp'), head=discovery.public_head(config.issuer, '/connect/claude'))
@@ -1005,7 +1014,7 @@ def create_app(config=None, steam=None, database=None, download_dir=None, achiev
     identify_authorization_errors(app.routes, provider.authorization_issuer)
     app.add_exception_handler(HTTPException,browser_http_exception)
     app.routes.insert(0,Route('/.well-known/oauth-authorization-server',metadata))
-    app.routes.extend([Route('/data-handling',data_handling,methods=['GET']),Route('/import',manual_import_page),Route('/assets/import.js',import_script),Route('/assets/belmont-parser.js',parser_script),Route('/v1/browser/observations',manual_import,methods=['POST']),Route('/assets/console.css',stylesheet),Route('/setup',setup_page),Route('/downloads/deck-companion.zip',download),Route('/downloads/deck-companion.zip.sha256',download_checksum),Route('/healthz',health),Route('/',home),Route('/games',games),Route('/connect/claude',connect_claude),Route('/login',login),Route('/steam/callback',callback),
+    app.routes.extend([Route('/start',onboarding),Route('/assets/onboarding.js',onboarding_script),Route('/data-handling',data_handling,methods=['GET']),Route('/import',manual_import_page),Route('/assets/import.js',import_script),Route('/assets/belmont-parser.js',parser_script),Route('/v1/browser/observations',manual_import,methods=['POST']),Route('/assets/console.css',stylesheet),Route('/setup',setup_page),Route('/downloads/deck-companion.zip',download),Route('/downloads/deck-companion.zip.sha256',download_checksum),Route('/healthz',health),Route('/',home),Route('/games',games),Route('/connect/claude',connect_claude),Route('/login',login),Route('/steam/callback',callback),
         Route('/v1/devices/pair/start',pair_start,methods=['POST']),Route('/v1/devices/pair/poll',pair_poll,methods=['POST']),
         Route('/devices/approve',approve_device,methods=['GET','POST']),Route('/v1/device/observations',ingest,methods=['POST']),
         Route('/oauth/consent',consent,methods=['GET','POST']),Route('/account/library/permission',library_permission,methods=['POST']),Route('/account/library/refresh',refresh_library,methods=['POST']),Route('/account/achievements/refresh',refresh_achievements,methods=['POST']),Route('/account/games/add',add_game,methods=['POST']),Route('/account/games',choose_games,methods=['POST']),Route('/account/games/permissions',game_permission,methods=['POST']),Route('/account/games/revoke',revoke_selected_game,methods=['POST']),Route('/account/notifications',notification_settings,methods=['POST']),Route('/account/notifications/read',notification_read,methods=['POST']),Route('/account/revoke',revoke,methods=['POST']),Route('/logout',logout,methods=['POST'])])
