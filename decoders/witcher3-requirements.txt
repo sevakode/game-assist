@@ -1,0 +1,2 @@
+# Optional local research only; do not include in server requirements.
+lz4==4.4.5
