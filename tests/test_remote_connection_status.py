@@ -41,7 +41,7 @@ class ConnectionStatusTests(unittest.TestCase):
         self.assertEqual(empty['reasons'],['no_authorized_games_visible'])
         self.assertEqual(empty['actions'],['review_game_selection_and_permissions'])
         self.choose([4231820,1245620])
-        self.assertEqual(self.status(token),empty)
+        self.assertEqual({**self.status(token), 'checked_at': empty['checked_at']}, empty)
         self.choose([4231820,1245620],summary=True)
         pending=self.status(token)['games']
         self.assertEqual([game['appid'] for game in pending],[4231820])
@@ -50,7 +50,7 @@ class ConnectionStatusTests(unittest.TestCase):
         self.assertEqual(self.submit().status_code,200)
         self.assertIn('summary_snapshot_available',self.status(token)['games'][0]['reasons'])
         self.revoke(4231820)
-        self.assertEqual(self.status(token),empty)
+        self.assertEqual({**self.status(token), 'checked_at': empty['checked_at']}, empty)
         response=self.client.post('/account/revoke',data={'csrf':self.csrf()},headers={'origin':service.ORIGIN})
         self.assertEqual(response.status_code,303)
         self.assertEqual(self.mcp(token,'tools/call',{'name':'get_connection_status','arguments':{}}).status_code,401)

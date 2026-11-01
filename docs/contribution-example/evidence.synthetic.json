@@ -1,0 +1,11 @@
+{
+  "appid": 999999999,
+  "game_version": "synthetic-example-build-1",
+  "parser_id": "synthetic-example-only",
+  "parser_version": "1",
+  "verified": false,
+  "flags": {
+    "fictional.pickup.a": false,
+    "fictional.hint.allowed": true
+  }
+}

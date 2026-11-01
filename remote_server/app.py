@@ -48,7 +48,7 @@ from . import ui, discovery
 from .ai_export import ManualAIExport
 from .data_handling import data_handling_page
 from .browser_errors import http_exception as browser_http_exception, wants_browser_error, error_page
-from .games import CURRENT_GAME_IDS, CATALOG_REVISION, GAMES, DISCOVERY_TITLES, discovery_catalog
+from .games import CURRENT_GAME_IDS, CATALOG_REVISION, GAMES, DISCOVERY_TITLES, discovery_catalog, public_game_identity
 
 APPID = 4231820
 COOKIE = '__Host-ga_session'
@@ -224,7 +224,7 @@ class Store:
                 scopes=game['authorized_scopes']
                 if not game['selected'] or not scopes:
                     continue
-                item={'appid':game['appid'],'status':'unknown','summary':None,'metadata':None,'received_at':None,'summary_received_at':None,'metadata_received_at':None,'summary_source':None,'metadata_source':None,'observation_time':'unknown',
+                item={'appid':game['appid'],**public_game_identity(game['appid']),'status':'unknown','summary':None,'metadata':None,'received_at':None,'summary_received_at':None,'metadata_received_at':None,'summary_source':None,'metadata_source':None,'observation_time':'unknown',
                       'summary_supported':game['summary_supported'],'cloud_available':False,'achievements_available':self.achievements_available}
                 if 'achievements.read' in scopes:
                     cached=db.execute('SELECT * FROM achievement_cache WHERE owner=? AND appid=?',(owner,game['appid'])).fetchone()
@@ -456,7 +456,7 @@ def create_app(config=None, steam=None, database=None, download_dir=None, achiev
         token = get_access_token()
         if not token or not token.subject:
             raise ValueError('Authentication required')
-        return store.projection(token.subject)
+        return {**store.projection(token.subject), 'checked_at': time.time()}
 
     @mcp.tool(title='Clarify the next step', annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=False))
     def suggest_next_step() -> dict:

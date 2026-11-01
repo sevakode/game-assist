@@ -36,3 +36,9 @@ def discovery_catalog(achievements_available=False):
              'cloud_available':False,'achievements_available':bool(achievements_available),
              'store_url':f'https://store.steampowered.com/app/{appid}/'}
             for appid,name in DISCOVERY_TITLES.items()]
+
+
+def public_game_identity(appid):
+    """Display identity only; never use account labels or infer ownership."""
+    name = DISCOVERY_TITLES.get(appid)
+    return {'name': name, 'name_source': 'public_registry' if name else 'unknown'}

@@ -116,3 +116,24 @@ responses and all identities are synthetic. No real Claude DCR behavior, live
 Steam source access, or production setup is established by these tests. A capable
 existing client can repeat human consent; an old progress-only registration still
 needs fresh DCR. Client UI behavior after optional-scope refusal remains a live gate.
+
+### Additive identity and check time
+
+`get_progress` and `get_connection_status` include top-level `checked_at`: server
+Unix time in seconds when this response is formed. It is not a save timestamp,
+achievement retrieval time, Steam freshness check, or evidence of current play.
+Existing receipt fields and `observation_time: "unknown"` keep their meaning.
+
+Already permitted games now include `name` and `name_source`. Names come only
+from the maintained public `DISCOVERY_TITLES` registry; unknown AppIDs return
+`name: null`, `name_source: "unknown"`. Known entries use `public_registry`.
+Account labels and library-cache names are never substituted. The connection
+status phone context carries the same public identity for its already-visible
+rows. No additional selected, registered, owned or recently played games become
+visible. Public identity does not certify game progress, release state or parser
+coverage. `suggest_next_step` inherits the permitted projection's identity fields.
+
+These fields are additive: connection status remains version 1; get_progress
+retains its existing unversioned envelope. Consumers should ignore unknown fields
+and must not use checked_at as data freshness. Existing fields are not renamed or
+removed, and no new scopes, grants, network requests or DTO input IDs are added.

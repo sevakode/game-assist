@@ -102,7 +102,7 @@ class ConsoleLayoutTests(unittest.TestCase):
         self.assertTrue(tree.find('input', name='csrf', value='synthetic-csrf'))
         source = ui.games_review_body('synthetic-csrf', [{'appid': 1245620, 'selected': True}])
         self.assertFalse(any('checked' in a for a, _ in Tree(source).find('input', type='checkbox')))
-        self.assertIn('Разбор сейва пока недоступен', self.selected_body())
+        self.assertIn('Разбор сохранений этой игры пока недоступен', self.selected_body())
         self.assertNotIn('<progress', self.selected_body())
 
     def test_permission_is_not_presented_as_received_data(self):

@@ -4,6 +4,7 @@ Receipt age is not save age or device liveness. No account discovery, I/O, or
 gameplay interpretation belongs in this adapter.
 """
 import math
+from .games import public_game_identity
 
 
 RECEIPT_REVIEW_AFTER_SECONDS = 86400
@@ -48,7 +49,7 @@ def phone_context(projection, origin, *, achievements_available, now):
             action = 'review_achievement_source'
         else:
             reason = 'unknown'
-        item = {'appid': game['appid'], 'reason': reason, 'action': action,
+        item = {'appid': game['appid'], **public_game_identity(game['appid']), 'reason': reason, 'action': action,
                 'visible_unlocked_count': count, 'url': origin + '/games'}
         if achievements is not None:
             item['receipt'] = receipt(achievements.get('received_at'), now)
@@ -62,7 +63,7 @@ def phone_context(projection, origin, *, achievements_available, now):
 
 def connection_status(projection, origin, *, achievements_available, now):
     result = {
-        'version': 1, 'connection': 'authenticated',
+        'version': 1, 'connection': 'authenticated', 'checked_at': now,
         'reasons': [], 'actions': [], 'games': [],
         'links': {name: origin + path for name, path in (
             ('games', '/games'), ('import', '/import'), ('setup', '/setup'),
@@ -85,7 +86,7 @@ def connection_status(projection, origin, *, achievements_available, now):
         result['reasons'].append('no_authorized_games_visible')
         result['actions'].append('review_game_selection_and_permissions')
     for game in projection['games']:
-        item = {'appid': game['appid'], 'reasons': [], 'actions': [], 'snapshots': {}}
+        item = {'appid': game['appid'], **public_game_identity(game['appid']), 'reasons': [], 'actions': [], 'snapshots': {}}
         if not game['summary_supported']:
             item['reasons'].append('summary_decoder_unavailable')
         for kind in ('summary', 'metadata'):

@@ -74,3 +74,5 @@ fieldset{border:1px solid var(--line);padding:18px;margin:20px 0;min-width:0}leg
 .manual-ai-export{border-top:1px solid var(--line);margin-top:18px;padding-top:8px}
 .manual-ai-export>button{margin-top:12px}
 .manual-ai-export [role=status]{font-size:13px;color:var(--focus);margin-top:10px}
+/* Selected-game next step: native forms and details work without JavaScript. */
+.next-status{list-style:none;padding:0;margin:12px 0;color:#d3e9f6;font-size:13px;display:grid;gap:4px}.next-action{display:grid;justify-items:start;gap:12px}.next-action form{max-width:100%;margin:0}.next-action .primary{white-space:normal;overflow-wrap:anywhere;max-width:100%;margin-top:12px}.optional-save{margin-top:16px;font-size:13px}.optional-save summary{cursor:pointer}.optional-save p{margin:10px 0}.focus-copy>.plain-link{display:inline-block;margin:14px 0 0}

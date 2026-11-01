@@ -1,0 +1,76 @@
+{
+  "schema_version": "1.0",
+  "records": [
+    {
+      "schema_version": "1.0",
+      "id": "synthetic.contribution-example-a",
+      "appid": 999999999,
+      "game_version": "synthetic-example-build-1",
+      "object_type": "hp_upgrade",
+      "synthetic": true,
+      "full_location": {
+        "area": "FICTIONAL BLUE ROOM",
+        "instructions": "Fictional test object beside a fictional blue marker. Not a location in any game.",
+        "requirements": [
+          "FICTIONAL BLUE TOKEN"
+        ],
+        "requirement_record_ids": [],
+        "review": {
+          "status": "unverified",
+          "reviewer": null,
+          "evidence_source_ids": [],
+          "notes": "Fictional example only; no factual or parser review has occurred."
+        }
+      },
+      "safe_hint": {
+        "text": "не забудь осмотреться",
+        "status": "draft",
+        "original": true,
+        "reviewer": null,
+        "trigger": {
+          "appid": 999999999,
+          "game_version": "synthetic-example-build-1",
+          "parser_id": "synthetic-example-only",
+          "parser_version": "1",
+          "flag_key": "fictional.hint.allowed",
+          "meaning": "hint_eligibility",
+          "true_value": true,
+          "review": {
+            "status": "unverified",
+            "reviewer": null,
+            "evidence_source_ids": [],
+            "notes": "Fictional example only; no factual or parser review has occurred."
+          }
+        }
+      },
+      "collection_mapping": {
+        "appid": 999999999,
+        "game_version": "synthetic-example-build-1",
+        "parser_id": "synthetic-example-only",
+        "parser_version": "1",
+        "flag_key": "fictional.pickup.a",
+        "meaning": "per_item_collection",
+        "true_value": true,
+        "review": {
+          "status": "unverified",
+          "reviewer": null,
+          "evidence_source_ids": [],
+          "notes": "Fictional example only; no factual or parser review has occurred."
+        }
+      },
+      "sources": [
+        {
+          "id": "fictional-observation",
+          "url": "https://example.invalid/game-assist/contribution-example",
+          "attribution": "Original Game Assist synthetic example. See local README.md, Synthetic observation; this URL is a non-resolving placeholder, not an external source."
+        }
+      ],
+      "rights": {
+        "contributor": "Game Assist contributors",
+        "basis": "original",
+        "license": "MIT (original synthetic example only; see LICENSE.txt)",
+        "permission_reference": null
+      }
+    }
+  ]
+}
