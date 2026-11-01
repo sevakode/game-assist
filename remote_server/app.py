@@ -301,8 +301,9 @@ class Boundary:
         request = Request(scope)
         async def secure(message):
             if message['type'] == 'http.response.start':
-                message['headers'] = [(k,v) for k,v in message['headers'] if k.lower() not in (b'access-control-allow-origin', b'cache-control')]
-                message['headers'] += [(b'cache-control', b'no-store'), (b'referrer-policy', b'no-referrer'),
+                message['headers'] = [(k,v) for k,v in message['headers'] if k.lower() not in (b'access-control-allow-origin', b'cache-control', b'referrer-policy')]
+                # Native POST forms need their exact Origin; never disclose URL paths/query.
+                message['headers'] += [(b'cache-control', b'no-store'), (b'referrer-policy', b'strict-origin'),
                     (b'x-content-type-options', b'nosniff'), (b'content-security-policy', (b"default-src 'none'; style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'" + (b"; script-src 'self'; connect-src 'self'" if scope['path']=='/import' else b"; script-src 'self'" if scope['path']=='/start' else b''))),
                     (b'strict-transport-security', b'max-age=31536000')]
             await send(message)

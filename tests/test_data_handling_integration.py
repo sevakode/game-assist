@@ -20,7 +20,7 @@ class DataHandlingIntegration(unittest.TestCase):
                 self.assertNotIn('set-cookie',response.headers)
                 self.assertEqual(response.headers['x-robots-tag'],'noindex, nofollow')
                 self.assertEqual(response.headers['cache-control'],'no-store')
-                self.assertEqual({v.strip() for v in response.headers['referrer-policy'].split(',')},{'no-referrer'})
+                self.assertEqual(response.headers.get_list('referrer-policy'),['strict-origin'])
                 self.assertNotIn("'unsafe-inline'",response.headers['content-security-policy'])
             head=self.client.head('/data-handling')
             self.assertEqual(head.status_code,200)

@@ -16,7 +16,7 @@ request, конфигурацию или пользовательские дан
 существующий `/assets/console.css` и общие защитные границы приложения.
 Новых scripts, внешних ресурсов и сетевых источников нет.
 
-Ответ содержит `X-Robots-Tag: noindex, nofollow`, no-store и no-referrer; страница
+Ответ через общий Boundary содержит `X-Robots-Tag: noindex, nofollow`, no-store и strict-origin; страница
 не добавлена в sitemap/discovery public-pages allowlist. Noindex — указание
 поисковым роботам, не контроль доступа. Ссылка намеренно не называется
 «Политика конфиденциальности», пока отдельная политика не завершена.
