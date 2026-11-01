@@ -36,6 +36,8 @@ from starlette.concurrency import run_in_threadpool
 from server.app import SaveSummary
 from server.steam import SteamService, SteamError
 from .oauth import OAuthProvider, OAUTH_SCOPES
+from .observability import ObservabilityMiddleware, classify_request, configure_safe_stdout
+from diagnostics.preview import preview_page, preview_script
 from .auth_response import identify_authorization_errors
 from .connection_status import connection_status
 from .mcp_library import library_result
@@ -290,6 +292,27 @@ class Store:
             db.execute('INSERT INTO notifications VALUES(?,?,?,?,?,NULL)',(str(uuid4()),owner,appid,key,now))
         db.execute('DELETE FROM notifications WHERE owner=? AND id NOT IN (SELECT id FROM notifications WHERE owner=? ORDER BY created DESC,id DESC LIMIT 50)',(owner,owner))
 
+class ResponseSecurity:
+    """Apply the existing response policy also to outer framework error responses."""
+    def __init__(self, app):
+        self.app = app
+
+    def __getattr__(self, name):
+        return getattr(self.app, name)
+
+    async def __call__(self, scope, receive, send):
+        if scope['type'] != 'http':
+            return await self.app(scope, receive, send)
+        async def secure(message):
+            if message['type'] == 'http.response.start':
+                message['headers'] = [(k,v) for k,v in message['headers'] if k.lower() not in (b'access-control-allow-origin', b'cache-control', b'referrer-policy')]
+                # Native POST forms need their exact Origin; never disclose URL paths/query.
+                message['headers'] += [(b'cache-control', b'no-store'), (b'referrer-policy', b'strict-origin'),
+                    (b'x-content-type-options', b'nosniff'), (b'content-security-policy', (b"default-src 'none'; style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'" + (b"; script-src 'self'; connect-src 'self'" if scope['path']=='/import' else b"; script-src 'self'" if scope['path']=='/start' else b"; script-src 'self'; connect-src 'none'" if scope['path']=='/diagnostics' else b''))),
+                    (b'strict-transport-security', b'max-age=31536000')]
+            await send(message)
+        return await self.app(scope, receive, secure)
+
 class Boundary:
     """Bound body sizes before SDK parsing; exact raw redirect/resource validation."""
     def __init__(self, app, config, store):
@@ -299,17 +322,10 @@ class Boundary:
         if scope['type'] != 'http':
             return await self.app(scope, receive, send)
         request = Request(scope)
-        async def secure(message):
-            if message['type'] == 'http.response.start':
-                message['headers'] = [(k,v) for k,v in message['headers'] if k.lower() not in (b'access-control-allow-origin', b'cache-control', b'referrer-policy')]
-                # Native POST forms need their exact Origin; never disclose URL paths/query.
-                message['headers'] += [(b'cache-control', b'no-store'), (b'referrer-policy', b'strict-origin'),
-                    (b'x-content-type-options', b'nosniff'), (b'content-security-policy', (b"default-src 'none'; style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'" + (b"; script-src 'self'; connect-src 'self'" if scope['path']=='/import' else b"; script-src 'self'" if scope['path']=='/start' else b''))),
-                    (b'strict-transport-security', b'max-age=31536000')]
-            await send(message)
         async def reject(data, status):
+            classify_request(reason={'origin_denied': 'origin_denied', 'rate_limited': 'rate_limited'}.get(data.get('error'), 'invalid_request'))
             response=error_page(request,status) if wants_browser_error(request) else JSONResponse(data,status)
-            return await response(scope,receive,secure)
+            return await response(scope,receive,send)
         if len(scope.get('query_string', b'')) > 8192:
             return await reject({'error': 'query_too_large'}, 414)
         body = bytearray()
@@ -354,7 +370,7 @@ class Boundary:
                 sent = True
                 return {'type': 'http.request', 'body': bytes(body), 'more_body': False}
             return await receive()
-        return await self.app(scope, replay, secure)
+        return await self.app(scope, replay, send)
 
 async def json_body(request):
     try:
@@ -378,13 +394,17 @@ def hidden(name, value):
 
 async def form(request, session, issuer):
     if request.headers.get('origin') != issuer:
+        classify_request(reason='origin_denied')
         raise HTTPException(403, 'Origin required')
     data = await request.form()
     if len(data) != len(list(data.multi_items())) or not secrets.compare_digest(str(data.get('csrf','')), session['csrf']):
+        classify_request(reason='csrf_denied')
         raise HTTPException(403, 'Invalid CSRF token')
     return data
 
 def create_app(config=None, steam=None, database=None, download_dir=None, achievement_reader=None, library_reader=None):
+    # A factory-created ASGI app also needs the safe sink, not just the CLI.
+    configure_safe_stdout()
     config = config or Config.from_env()
     database = database or Database(config.db_path, database_url=config.database_url)
     store = Store(config.db_path, database=database)
@@ -609,6 +629,7 @@ def create_app(config=None, steam=None, database=None, download_dir=None, achiev
             if db.execute('SELECT count(*) FROM pairings').fetchone()[0]>=2000:
                 raise HTTPException(429,'Pairing capacity reached')
             db.execute('INSERT INTO pairings(hash,user_hash,expires,appid,requested_scopes) VALUES(?,?,?,?,?)',(digest(code),digest(user),time.time()+600,appid,json.dumps(scopes)))
+        classify_request(reason='pairing_pending')
         return JSONResponse({'device_code':code,'user_code':user,'verification_uri':config.issuer+'/devices/approve','expires_in':600,'interval':5,'appid':appid,'scopes':scopes})
 
     async def pair_poll(request):
@@ -620,14 +641,17 @@ def create_app(config=None, steam=None, database=None, download_dir=None, achiev
         with store.db() as db:
             row = db.execute('SELECT * FROM pairings WHERE hash=?', (key,)).fetchone()
             if not row or row['expires']<=time.time() or row['consumed']:
+                classify_request(reason='pairing_expired')
                 return JSONResponse({'status':'expired'}, 400)
             if row['last_poll']+5>time.time():
                 return JSONResponse({'status':'slow_down','interval':5}, 429)
             db.execute('UPDATE pairings SET last_poll=? WHERE hash=?', (time.time(), key))
             if not row['owner']:
+                classify_request(reason='pairing_pending')
                 return JSONResponse({'status':'pending','interval':5})
             scopes=json.loads(row['scopes'])
             if not db.execute('SELECT 1 FROM game_selections WHERE owner=? AND appid=?',(row['owner'],row['appid'])).fetchone() or any(not db.execute('SELECT 1 FROM grants WHERE owner=? AND appid=? AND scope=?',(row['owner'],row['appid'],scope)).fetchone() for scope in scopes):
+                classify_request(reason='consent_required')
                 return JSONResponse({'status':'expired'},400)
             db.execute('DELETE FROM devices WHERE expires<=?', (time.time(),))
             if db.execute('SELECT count(*) FROM devices WHERE owner=?',(row['owner'],)).fetchone()[0] >= 100:
@@ -661,6 +685,7 @@ def create_app(config=None, steam=None, database=None, download_dir=None, achiev
                 raise HTTPException(422,'Add this AppID to your games before pairing')
             pending=db.execute('SELECT * FROM pairings WHERE user_hash=? AND expires>? AND owner IS NULL AND consumed=0',(digest(user),time.time())).fetchone()
             if not pending:
+                classify_request(reason='pairing_expired')
                 raise HTTPException(400,'Invalid or expired device code')
             if appid!=pending['appid'] or scopes!=sorted(json.loads(pending['requested_scopes'])) or ('saves.summary' in scopes and appid!=APPID):
                 raise HTTPException(422,'Game and scopes must exactly match the request shown on your device')
@@ -999,6 +1024,13 @@ def create_app(config=None, steam=None, database=None, download_dir=None, achiev
         response.delete_cookie(COOKIE,secure=True,httponly=True,samesite='lax',path='/')
         return response
 
+    async def diagnostics_preview(request):
+        store.session(request, True)
+        return HTMLResponse(preview_page())
+
+    async def diagnostics_script(request):
+        return PlainTextResponse(preview_script(), media_type='application/javascript')
+
     async def metadata(request):
         data=build_metadata(AnyHttpUrl(config.issuer),None,registration,revocation).model_dump(mode='json',exclude_none=True)
         data['token_endpoint_auth_methods_supported']=['none']
@@ -1015,7 +1047,7 @@ def create_app(config=None, steam=None, database=None, download_dir=None, achiev
     identify_authorization_errors(app.routes, provider.authorization_issuer)
     app.add_exception_handler(HTTPException,browser_http_exception)
     app.routes.insert(0,Route('/.well-known/oauth-authorization-server',metadata))
-    app.routes.extend([Route('/start',onboarding),Route('/assets/onboarding.js',onboarding_script),Route('/data-handling',data_handling,methods=['GET']),Route('/import',manual_import_page),Route('/assets/import.js',import_script),Route('/assets/belmont-parser.js',parser_script),Route('/v1/browser/observations',manual_import,methods=['POST']),Route('/assets/console.css',stylesheet),Route('/setup',setup_page),Route('/downloads/deck-companion.zip',download),Route('/downloads/deck-companion.zip.sha256',download_checksum),Route('/healthz',health),Route('/',home),Route('/games',games),Route('/connect/claude',connect_claude),Route('/login',login),Route('/steam/callback',callback),
+    app.routes.extend([Route('/diagnostics',diagnostics_preview,methods=['GET']),Route('/assets/diagnostics.js',diagnostics_script,methods=['GET']),Route('/start',onboarding),Route('/assets/onboarding.js',onboarding_script),Route('/data-handling',data_handling,methods=['GET']),Route('/import',manual_import_page),Route('/assets/import.js',import_script),Route('/assets/belmont-parser.js',parser_script),Route('/v1/browser/observations',manual_import,methods=['POST']),Route('/assets/console.css',stylesheet),Route('/setup',setup_page),Route('/downloads/deck-companion.zip',download),Route('/downloads/deck-companion.zip.sha256',download_checksum),Route('/healthz',health),Route('/',home),Route('/games',games),Route('/connect/claude',connect_claude),Route('/login',login),Route('/steam/callback',callback),
         Route('/v1/devices/pair/start',pair_start,methods=['POST']),Route('/v1/devices/pair/poll',pair_poll,methods=['POST']),
         Route('/devices/approve',approve_device,methods=['GET','POST']),Route('/v1/device/observations',ingest,methods=['POST']),
         Route('/oauth/consent',consent,methods=['GET','POST']),Route('/account/library/permission',library_permission,methods=['POST']),Route('/account/library/refresh',refresh_library,methods=['POST']),Route('/account/achievements/refresh',refresh_achievements,methods=['POST']),Route('/account/games/add',add_game,methods=['POST']),Route('/account/games',choose_games,methods=['POST']),Route('/account/games/permissions',game_permission,methods=['POST']),Route('/account/games/revoke',revoke_selected_game,methods=['POST']),Route('/account/notifications',notification_settings,methods=['POST']),Route('/account/notifications/read',notification_read,methods=['POST']),Route('/account/revoke',revoke,methods=['POST']),Route('/logout',logout,methods=['POST'])])
@@ -1023,5 +1055,5 @@ def create_app(config=None, steam=None, database=None, download_dir=None, achiev
     app.add_middleware(Boundary,config=config,store=store)
     app.add_middleware(TrustedHostMiddleware,allowed_hosts=[urlsplit(config.issuer).hostname])
     app.state.store,app.state.provider,app.state.config=store,provider,config
-    return app
+    return ObservabilityMiddleware(ResponseSecurity(app), expected_origin=config.issuer)
 

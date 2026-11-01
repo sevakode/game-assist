@@ -1,56 +1,66 @@
 # Остаток до готового продукта
 
-Обновлено 2026-10-31, 23:48 UTC. Порядок и критерии: [ROADMAP.md](ROADMAP.md).
-Публикация не завершает разработку; следующий шаг — первый незаблокированный срез.
+Обновлено 2026-11-01, 02:55 UTC. Критерии: [ROADMAP.md](ROADMAP.md).
+Приоритет — **телефон: Steam → выбрать игру → помощник**, без обязательного
+Steam Deck, Desktop Mode или локальной установки.
 
-## Текущий candidate — локальный, не опубликован
+## Текущее состояние — 2026-11-01, 02:55 UTC
 
-Live baseline: `ef1…`, runtime-only rebuild **Python 3.12.16**,
-deploy `dep-dbj7p6mtlv9c73cf7tmg`; новых функций этим rebuild не опубликовано.
-Wave 2 локально включает:
-- **Private capture/compare:** read-only копии/сравнение; настоящие controlled
-  пары и semantic mapping ещё не проверены.
-- **Deck:** atomic recovery + compatibility workflow; без аппаратной приёмки.
-- **OAuth/MCP:** optional `library.read` default OFF, cached/permission-gated
-  `get_library`, `connection_status`; без новых ключей и live-client claims.
-- **Discovery:** `/connect`, robots/sitemap/llms и private noindex. Noindex не
-  заменяет авторизацию и полноценную privacy policy.
+LIVE: `2a9099de52839cf1a7e01e594130a69ef6c88920`, проверено в 02:45:04 UTC.
+Опубликованы исправления systemd WorkingDirectory и pairing diagnostics.
+CI: 638 PASS, 3 optional-browser skips; Deck matrix: 125 тестов на каждой из
+трёх Python versions. Работа на физическом устройстве не проверен.
 
-Fixture fix и MCP consent/Deck acceptance tests включены; helper MODULES
-содержит Deck acceptance. Итоговая suite **600 за 11.296 s: 499 PASS +
-101 PG skips, OK**. Отдельная stdlib suite **116 за 1.574 s, 0 skips, PASS**. Это не real-PG проверка. Capture/compare: 22 теста независимо PASS при
-umask 0022 и 0077.
-Native reviews: MCP 26 / stdlib Deck 113 PASS, без новых findings. JS/manual-import,
-compile/catalog/profiles PASS. Guide records 0, profiles 3; Belmont по-прежнему
-только четыре raw поля. Исторические 476/83 skips и 424 actual-PG checkpoints
-не относятся к текущему candidate. Публикация Wave 2 не выполнена.
+**Не опубликовано:** единый кандидат из **25 файлов**: 9 изменений для телефона,
+14 файлов диагностики и 2 документа roadmap/backlog. `/start` предлагает ручное
+начальное сообщение без установки; `phone_context` читает только разрешённые
+данные. Ссылка или открытие AI не подключают аккаунт. Диагностика добавляет
+безопасные request IDs/stdout events и локальные session-gated просмотр/скачивание;
+отправки или хранения отчётов на сервере нет.
 
-## Следующие проверяемые задачи
+Общий локальный прогон: **679 тестов, 575 PASS, 104 skips, 0 failures**.
+Из skips: 101 требует одноразового PostgreSQL, 3 — optional Chromium. Это не
+проверка PostgreSQL текущего кандидата. Python/JS/UI/catalog/profile checks прошли.
+В управляемом браузере пройдены синтетические сценарии телефона при ширине
+320/392 px и настольного окна: начало беседы, локальная диагностика, копирование,
+раскрытие необязательных настроек и возврат из `/setup` в игры. Объединённая
+диагностика повторно проверена на 320/392 px: навигация «Ещё», закрытые
+необязательные секции и перенос длинного JSON без расширения страницы. Это не
+реальный вход Steam, физический телефон, подключение MCP или приёмка Deck.
+Кандидат остаётся локальным; опубликован только baseline `2a9099` выше.
 
-- [ ] **REL:** fixture fix/локальная regression пройдены; actual disposable-PG CI →
-  review → разрешённый выпуск → проверить
-  deployed revision/health/OAuth metadata/ZIP checksum; затем продолжать roadmap.
-- [ ] **IMP-04/OAuth:** настоящий phone Steam callback, consent, manual import и
-  выбранный MCP клиент с cancel/retry/revoke. В docs 7 client recipes; следующий
-  кандидат — ChatGPT web. Реальные подключения не проверены; static preview/test
-  client не замена.
-- [ ] **BEL:** controlled private before/after + точный build + независимый
-  in-game ground truth; один reviewed mapping. Пока unknown, не число улучшений.
-- [ ] **DECK:** физическая установка, doctor/recovery, Game Mode, suspend/offline,
-  expiry/revoke/uninstall с неизменными оригиналами.
-- [ ] **ER/W3:** licenses/dependencies/build/fixtures до gameplay adapter;
-  signature/container recognition не означает поддержку прогресса.
-- [ ] **ACH/LIB:** безопасная отдельное явное согласие на операторский ключ, его безопасная настройка
-  и consented live check;
-  private profile не становится доступным по одному ключу. Никакого auto-grant.
-- [ ] **CLD/OPS:** разрешённый Cloud source, scheduler, отдельно разрешённая
-  доставка, реальные latency/cost/retention/restore evidence и готовая privacy policy.
+Отдельно staged Belmont structure (3 файла): пять выбранных структур проверены на
+разрешённой локальной копии; это не владение предметами и не игровую семантику.
+Разовые ручные загрузки из облачного хранилища не являются продуктовой
+API-интеграцией или автоматическим доступом к новым сохранениям.
 
-## Что по-прежнему нельзя обещать
+## Следующие действия и зависимости
 
-17 discovery игр ≠ 17 декодеров; profiles 3, real knowledge facts 0. Универсальные
-AppID/permissions ≠ универсальный parsing. Только Belmont JSON 1.1.3 имеет четыре
-raw scalar поля, без pickup mapping/максимумов HP/маны. Manual import не Cloud;
-Deck optional, inbox не push. Реальные Steam/Claude/Deck/controlled-fixture gates
-остаются открыты. Новые credentials/cost/access и публикация private данных требуют
-отдельной границы разрешения; работа над безопасными независимыми тестами продолжается.
+- [ ] **PHONE:** синтетические браузерные сценарии `/start` и возврат из `/setup`
+  проверены; далее настоящая первая беседа на телефоне и вход Steam. Открытая AI-ссылка не значит account link.
+- [ ] **CONTEXT:** scopes/refresh/revoke/freshness и unknown states; беседа при
+  unavailable источнике начинается с ответов игрока, не выдуманного прогресса.
+- [ ] **STEAM READ:** отдельно разрешённая настройка → explicit refresh → реальный
+  доступный ответ → bounded cache. Mock/ключ/Steam login не доказывают Cloud access.
+- [ ] **MCP:** поддерживаемый клиент → настоящий OAuth/read-tool/refresh/revoke
+  с разрешёнными данными. Без connector только вручную сообщённый контекст.
+- [ ] **DIAG/REL:** объединённые 25 файлов прошли общий локальный прогон;
+  синтетические браузерные сценарии на 320/392 px и desktop пройдены.
+  Далее настоящий PostgreSQL и разрешённый выпуск с проверкой ревизии. Отчёты — только локальные просмотр/скачивание после
+  входа, без отправки или хранения на сервере. Это не реальная приёмка MCP/телефона.
+- [ ] **BEL:** controlled fixtures + ground truth для mapping; shape validation
+  не означает pickup ownership. Приватные исходники не публиковать.
+- [ ] **ER/W3:** лицензии/зависимости, точные версии и разрешённые fixtures до
+  семантического read-only parser. ER signature-only не означает поддержку;
+  Witcher 3 требует образца и подтверждения формата/игровых значений.
+- [ ] **COMMUNITY:** проверяемые источники и права, отдельная лицензия данных,
+  независимый review mapping и безопасных подсказок. Профиль не исполняет код;
+  отсутствие флага — unknown, не доказательство отсутствия предмета.
+- [ ] **OPTIONAL:** реальный Deck hardware flow; отдельно Cloud source/scheduler/
+  delivery. Ни один не блокирует честную manual phone conversation.
+- [ ] **MARKET:** данные издателя/адрес поддержки/privacy/retention/реальная приёмка
+  до submissions; пока ничего не отправлено.
+
+17 discovery игр ≠ 17 декодеров; profiles 3, записей базы прохождения 0. Точная семантика
+Belmont неизвестна; current resources не максимумы. Новые credentials, permissions,
+стоимость и публикация private данных не подразумеваются roadmap.

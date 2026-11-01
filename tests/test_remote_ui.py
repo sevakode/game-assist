@@ -411,7 +411,7 @@ class FirstVisitTests(unittest.TestCase):
         parsed=Elements(source)
         self.assertTrue(parsed.find('h1',id='entry-title'))
         self.assertTrue(parsed.find('a',href='/login?next=/games'))
-        self.assertTrue(parsed.find('a',href='/connect'))
+        self.assertTrue(parsed.find('a',href='/start'))
         self.assertTrue(parsed.find('a',href='/games#library'))
         self.assertFalse(parsed.find('aside',id='library'))
         self.assertFalse(parsed.find('header',id='selected-game'))

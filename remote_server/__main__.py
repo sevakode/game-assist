@@ -30,7 +30,8 @@ def server_options(environ=None):
 
 def main():
     options = server_options()
-    uvicorn.run(create_app(Config.from_env()), **options)
+    # create_app installs the allowlist sink. Uvicorn must not replace it.
+    uvicorn.run(create_app(Config.from_env()), log_config=None, **options)
 
 
 if __name__ == '__main__':

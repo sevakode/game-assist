@@ -20,6 +20,46 @@ def receipt(received_at, now):
                        if age >= RECEIPT_REVIEW_AFTER_SECONDS else 'receipt_age_known')}
 
 
+def phone_context(projection, origin, *, achievements_available, now):
+    """Conversation can start without a save or companion; never infer position."""
+    games = []
+    for game in projection['games']:
+        achievements = game.get('achievements')
+        status = achievements.get('status') if achievements is not None else None
+        count = None
+        action = 'continue_with_user_context'
+        if not achievements_available:
+            reason = 'operator_source_not_configured'
+        elif achievements is None:
+            reason = 'achievement_permission_not_visible'
+            action = 'review_game_selection_and_permissions'
+        elif status == 'not_requested':
+            reason = 'permission_only'
+            action = 'refresh_achievements_on_site'
+        elif status == 'ok':
+            count = len(achievements['items'])
+            reason = 'received' if count else 'received_empty'
+            action = 'read_permitted_progress_then_ask_goal'
+        elif status == 'expired':
+            reason = 'expired'
+            action = 'refresh_achievements_on_site'
+        elif status in ('unavailable', 'private', 'rate_limited', 'not_configured'):
+            reason = 'source_unavailable'
+            action = 'review_achievement_source'
+        else:
+            reason = 'unknown'
+        item = {'appid': game['appid'], 'reason': reason, 'action': action,
+                'visible_unlocked_count': count, 'url': origin + '/games'}
+        if achievements is not None:
+            item['receipt'] = receipt(achievements.get('received_at'), now)
+        games.append(item)
+    return {'companion_required_for_conversation': False,
+            'fallback_action': 'ask_game_and_current_goal',
+            'current_game_and_position': 'unknown',
+            'achievement_interpretation': 'unknown',
+            'games': games}
+
+
 def connection_status(projection, origin, *, achievements_available, now):
     result = {
         'version': 1, 'connection': 'authenticated',
@@ -38,6 +78,8 @@ def connection_status(projection, origin, *, achievements_available, now):
         },
         'receipt_review_after_seconds': RECEIPT_REVIEW_AFTER_SECONDS,
         'observation_time': 'unknown',
+        'phone_context': phone_context(projection, origin,
+            achievements_available=achievements_available, now=now),
     }
     if not projection['games']:
         result['reasons'].append('no_authorized_games_visible')

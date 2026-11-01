@@ -58,7 +58,7 @@ class OnboardingTests(unittest.TestCase):
             self.assertFalse(Elements(source).find('input', type='checkbox'))
 
     def test_copy_feedback_is_adjacent_and_claude_opens_at_first_step(self):
-        for step, field in [('connect', 'start-endpoint'), ('choose', 'start-prompt')]:
+        for step, field in [('connect', 'phone-prompt'), ('choose', 'start-prompt')]:
             source = ui.start_body('https://assist.example/mcp', step)
             doc = Elements(source)
             button = doc.find('button', **{'data-copy': field})[0]
@@ -68,10 +68,20 @@ class OnboardingTests(unittest.TestCase):
             self.assertFalse(doc.find('p', id='copy-status'))
         doc = Elements(ui.start_body('https://assist.example/mcp'))
         link = doc.find('a', href='https://claude.ai/')[0]
-        self.assertEqual(link['class'], 'plain-link')
+        self.assertEqual(link['class'], 'button primary')
         self.assertEqual(link['target'], '_blank')
         self.assertIn('noopener', link['rel'])
         self.assertEqual(len(doc.find('a', **{'class': 'button primary'})), 1)
+
+    def test_phone_flow_return_and_repeat_do_not_change_selection(self):
+        self.sign_in()
+        self.choose([1245620])
+        before = self.catalog()
+        for path in ['/start', '/start?step=choose', '/start', '/games', '/start', '/start?step=play', '/games']:
+            response = self.client.get(path)
+            self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.catalog(), before)
+        self.assertTrue(Elements(self.client.get('/start').text).find('a', href='/games'))
 
     def test_connect_keeps_data_disclosure_link(self):
         self.assertTrue(Elements(self.client.get('/connect').text).find('a', href='/data-handling'))
