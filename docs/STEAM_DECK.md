@@ -530,3 +530,102 @@ path discovery, free-host cold-start/offline latency, battery use, all Python
 versions or the selected phone assistant's connector. Those remain the distinct
 hardware/external gates above. No synthetic result should be recorded as passing
 one of them; actual Deck/phone access is the next external dependency.
+
+## Unit serialization and pairing-recovery correction (review candidate)
+
+A reported real-Deck failure was independently reproduced with **systemd-analyze
+257.13** on synthetic units, without launching a service. The old generator put
+outer quotes around `WorkingDirectory`; the parser rejected the path as not
+absolute. Removing those outer quotes fixed that parser failure. This establishes
+a generator defect, not the state/version of any particular user's device.
+
+`WorkingDirectory` takes a literal absolute path with systemd specifiers, while
+`ExecStart` has separate command-word parsing. The corrected generator keeps the
+executable quoted, writes WorkingDirectory without outer quotes, and doubles `%`
+in both settings. Source: [systemd.exec](https://www.freedesktop.org/software/systemd/man/latest/systemd.exec.html#WorkingDirectory=)
+and [official v257 parser implementation](https://github.com/systemd/systemd/blob/v257/src/core/load-fragment.c)
+(`config_parse_working_directory`, `config_parse_exec`).
+
+| Synthetic path case | Result / supported behavior |
+| --- | --- |
+| Normal absolute path, embedded spaces, literal `%`, UTF-8 `café` with spaces/`%` | Generated unit passes real parser verification; executable remains one quoted word. |
+| Relative path or `..` component | Generator rejects before creating installation files. |
+| Single/double quote or backslash | Generator rejects: systemd 257 rejects these characters in the executable path even after word escaping. Do not claim these paths are supported. |
+| C0/C1 controls including newline/tab/NUL/DEL, surrogate characters | Generator rejects; no unit directive injection or partial install is attempted. |
+| Legacy quoted WorkingDirectory | Regression confirms the real parser rejects it with “path is not absolute”. |
+
+The committed parser test invokes only `systemd-analyze verify --man=no
+--generators=no` against temporary synthetic files. It does not execute the dummy
+interpreter, start/reload a manager, alter the OS or install a real service.
+It needs a local systemd-analyze binary; absent that binary it skips, and the
+existing strict compatibility runner treats a skip as incomplete validation.
+This does not establish older/newer systemd or SteamOS behavior beyond the tested
+parser. Existing permissions, no-symlink checks, atomic unit publication and
+private state operations are unchanged. The user's old installation is not
+rewritten. Doctor can report `unit_mismatch` for an old unit; any reviewed
+reinstallation remains a separate explicit owner action, not a requirement to
+interrupt current gameplay.
+
+Pairing now prints a fixed, local reason before the generic setup-incomplete
+message. No new diagnostic file/schema, external logging or automatic report is
+introduced. User codes/device tokens/HTTP bodies/private paths are not included
+in these reason messages. Normal interactive pairing still displays the new
+short-lived code locally so its owner can approve it.
+
+| Observed condition | Message meaning / recovery |
+| --- | --- |
+| Initial request timeout/offline/cold-start failure | Connection unavailable; wait for availability, then explicitly start a new attempt. |
+| Pending responses until the local deadline | Approval for **this attempt** was not observed. A successful phone screen may relate to another attempt, but this is only a possibility; the cause remains unknown. Use the currently displayed code for that attempt, never an earlier screen's code. |
+| Deadline after polling connection failures | Approval state is unknown; not a claim that the owner denied it. |
+| Explicit `expired` / `denied` response | Report only that explicit service status. |
+| Poll HTTP 400/404/410 | Request unusable/rejected; expiration, consumption and invalidity cannot be distinguished without an established server contract. Response bodies are not read or printed. |
+| Other non-retryable HTTP rejection, including 401/403 | Report rejection; inspect the website/game permission, never bypass access controls. |
+| Another local pairing committed meanwhile | Preserve that pairing and report the local conflict; do not overwrite it. |
+| Approved game/scope mismatch or malformed approval | Reject it; retain the previous local pairing and queue. |
+
+There is **no established root cause** for the reported “phone approved but Deck
+stayed pending” incident. These tests cover distinguishable client observations,
+not production pairing state. Real expired/consumed-code server responses and
+phone/Deck timing still need the backend owner's evidence. No user's one-time
+codes are part of the fixtures or report. Existing retry/code-lifetime limits,
+explicit replacement consent and generation binding remain intact.
+
+Local candidate validation: **125 focused stdlib/compatibility tests PASS, zero
+skips**, separately on Python **3.12.14** and **3.13.5**; **86 Deck tests PASS**
+on Python 3.12.14 including the fake-backend integration. The real parser matrix
+ran on systemd **257.13**. Compile and diff whitespace checks passed. This is
+local candidate evidence, not GitHub CI, a release or hardware acceptance.
+
+### Portable parser regression fixture
+
+`systemd-analyze verify` also resolves referenced/default units and executable
+availability; a return code alone does not isolate a serialization failure.
+A minimal container without `sysinit.target` can reject an otherwise valid unit.
+This dependency was reproduced locally by isolating unit lookup without fixtures.
+See the official [verify documentation](https://www.freedesktop.org/software/systemd/man/latest/systemd-analyze.html#systemd-analyze%20verify%20FILE%E2%80%A6).
+
+The parser regression now supplies temporary synthetic `sysinit`, `basic`,
+`shutdown`, `network-online` and `default` targets via `SYSTEMD_UNIT_PATH`, fixes
+the diagnostic locale, and resolves the parser binary before setting its child
+environment. The generated service remains byte-for-byte unchanged, including
+its default dependencies and security settings. No host units or OS protections
+are modified. Each supported-path case must pass, then fail with its executable
+removed, fail with an added missing required target, and pass again after repair.
+The legacy quoted WorkingDirectory must still fail. Failure output identifies
+the synthetic case and redacts the temporary root so staging can distinguish a
+parser defect from missing/noexec prerequisites. No extra skip was introduced.
+
+This improves isolation of the regression fixture; it does not establish the
+cause of a particular staging failure until its stderr is compared. Release
+readiness still requires the corrected test and the remaining checks to pass
+in the integration environment. Local success is not a published release or a
+successful real-device installation; existing user config/queue are untouched.
+
+Integration reproduced a different container prerequisite failure on systemd
+257.13: `Failed to create directory '/run/systemd/': Read-only file system`.
+The verifier now explicitly uses `--user`, matching the installed user service,
+and a temporary mode-0700 `XDG_RUNTIME_DIR` inside the synthetic test tree.
+This does not change host permissions, create host runtime directories, contact
+a running service manager, or skip a check. The actual generated unit and all
+positive/negative parser cases remain intact; only the verifier's scope and
+private runtime location change.

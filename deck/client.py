@@ -225,6 +225,24 @@ def clean_summary(value):
     return clean
 
 
+def _pairing_error(reason):
+    """Fixed local messages only; never interpolate server bodies or credentials."""
+    messages = {
+        'connection': 'Pairing connection unavailable. The service may be offline or waking. Retry pair explicitly for a fresh code.',
+        'rejected': 'Pairing request rejected by the service. Check the selected game and permission on the website; do not bypass an access error.',
+        'unusable': 'This pairing request is no longer usable or was rejected. Expired, consumed or invalid codes cannot be distinguished from this HTTP response. Run pair again and use only its newly displayed code.',
+        'expired': 'The service reports this pairing attempt expired. Run pair again and approve its newly displayed code.',
+        'denied': 'The service reports this pairing attempt denied. No local pairing was replaced; repeat only if you choose to approve it.',
+        'pending_deadline': 'Pairing wait ended: approval for this attempt was not observed. If the phone showed success, check that it used this attempt’s code; the cause is not established. Run pair again explicitly when ready.',
+        'network_deadline': 'Pairing wait ended after connection failures. Approval status is unknown. Check service availability before starting a new explicit attempt.',
+        'changed': 'Another local pairing changed while waiting. This attempt did not overwrite it. Check local status before explicitly pairing again.',
+        'mismatch': 'Approved game or scope does not match this attempt. No local pairing was replaced; check the selection before retrying.',
+        'invalid': 'Pairing service response was not understood. No local pairing was replaced. Retry later or report this fixed message without codes or tokens.',
+    }
+    print(messages[reason])
+    return ValueError('Pairing incomplete')
+
+
 def pair(store, transport, path, sleep=time.sleep, monotonic=time.monotonic, *, appid=4231820, mode='belmont-summary', ask=input):
     scope = selection(appid, mode)
     previous = store.read('config.json')
@@ -241,7 +259,11 @@ def pair(store, transport, path, sleep=time.sleep, monotonic=time.monotonic, *, 
     else:
         print('Локальный файл — только чтение; передаются только четыре поля Belmont 1.1.3 и ограничения декодера, не содержимое сейва.')
     print('Approve this same game and scope on your phone. Add an unknown game to your service catalogue first.')
-    start = transport.post('/v1/devices/pair/start', {'appid': appid, 'scopes': [scope]})
+    try:
+        start = transport.post('/v1/devices/pair/start', {'appid': appid, 'scopes': [scope]})
+    except (urllib.error.URLError, OSError) as error:
+        reason = 'rejected' if isinstance(error, urllib.error.HTTPError) and error.code in (400, 401, 403, 404, 422) else 'connection'
+        raise _pairing_error(reason) from None
     uri = start['verification_uri']
     parsed = urllib.parse.urlsplit(uri)
     if server_origin(urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, '', '', '')),
@@ -257,6 +279,8 @@ def pair(store, transport, path, sleep=time.sleep, monotonic=time.monotonic, *, 
     lifetime = min(600, max(1, int(start['expires_in'])))
     interval = min(60, max(5, int(start.get('interval', 5))))
     until = monotonic() + lifetime
+    last_poll_failed = False
+    pending_reported = False
     while monotonic() < until:
         sleep(interval)
         if monotonic() >= until:
@@ -265,24 +289,31 @@ def pair(store, transport, path, sleep=time.sleep, monotonic=time.monotonic, *, 
             result = transport.post('/v1/devices/pair/poll', {'device_code': start['device_code']})
         except (urllib.error.URLError, OSError) as error:
             if isinstance(error, urllib.error.HTTPError) and error.code not in (408, 429, 500, 502, 503, 504):
-                raise ValueError('Pairing rejected; start a new explicit pairing') from None
+                raise _pairing_error('unusable' if error.code in (400, 404, 410) else 'rejected') from None
+            last_poll_failed = True
             print('Pairing connection unavailable; retrying within the original code lifetime. Existing pairing is unchanged.')
             interval = min(60, interval * 2)
             continue
+        last_poll_failed = False
         if result.get('status') == 'pending':
+            if not pending_reported:
+                print('Waiting for approval of this attempt. Use only the code currently displayed here; an earlier attempt has a different code.')
+                pending_reported = True
             interval = min(60, max(5, int(result.get('interval', interval))))
             continue
+        if result.get('status') in ('expired', 'denied'):
+            raise _pairing_error(result['status'])
         token = result.get('device_token')
         if result.get('status') != 'approved' or not isinstance(token, str) or not token or len(token) > 4096 or any(c.isspace() for c in token):
-            raise ValueError('Pairing denied or expired')
+            raise _pairing_error('invalid')
         if type(result.get('appid')) is not int or result['appid'] != appid or result.get('scopes') != [scope]:
-            raise ValueError('Approved game/scope does not match requested selection')
+            raise _pairing_error('mismatch')
         # Selection may have disappeared or become a symlink during phone approval.
         signature(path, MAX_METADATA_BYTES if mode == 'metadata' else belmont.MAX_BYTES)
         generation = uuid.uuid4().hex
         with store.lock():
             if store.read('config.json').get('pairing_id') != previous_generation:
-                raise ValueError('Another pairing changed; repeat explicit replacement')
+                raise _pairing_error('changed')
             store.write('config.json', {'server': transport.origin, 'path': os.path.abspath(os.path.expanduser(path)), 'device_token': token, 'pairing_id': generation, 'appid': appid, 'mode': mode, 'expires_at': time.time() + min(2592000, max(1, int(result.get('expires_in', 2592000))))})
             store.write('state.json', {'pairing_id': generation, 'appid': appid, 'mode': mode})
         # Generation binding rejects old queues even if interrupted between writes.
@@ -290,7 +321,7 @@ def pair(store, transport, path, sleep=time.sleep, monotonic=time.monotonic, *, 
         if previous:
             print('Restart the user service explicitly to use the new pairing; revoke the old device separately on the service.')
         return
-    raise ValueError('Pairing expired; run pair again')
+    raise _pairing_error('network_deadline' if last_poll_failed else 'pending_deadline')
 
 
 class RePairRequired(Exception):

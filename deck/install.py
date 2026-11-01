@@ -8,6 +8,7 @@ import sys
 import importlib.util
 import stat
 import uuid
+import unicodedata
 
 from agent import watch
 
@@ -15,16 +16,26 @@ NAME = 'steam-game-companion'
 
 
 def unit_text(install):
-    # systemd specifiers must not interpret '%' in user paths; double quotes need escaping.
+    install = Path(install)
+    raw = str(install)
+    # WorkingDirectory is a literal path plus specifiers, not an ExecStart word.
+    # systemd also rejects quotes/backslashes/control characters in executable
+    # paths (string_is_safe); fail before installation rather than emit a bad unit.
+    if (not install.is_absolute() or '..' in install.parts
+            or any(c in raw for c in ('"', "'", '\\'))
+            or any(unicodedata.category(c) in ('Cc', 'Cs') for c in raw)):
+        raise ValueError('Unsupported installation path for the user service')
+
     def quote(value):
-        return '"' + str(value).replace('\\', '\\\\').replace('"', '\\"').replace('%', '%%') + '"'
+        return '"' + str(value).replace('%', '%%') + '"'
+
     return '''[Unit]
 Description=Opt-in Steam Deck save-summary companion
 After=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=''' + quote(install / 'source') + '''
+WorkingDirectory=''' + str(install / 'source').replace('%', '%%') + '''
 ExecStart=''' + quote(install / 'venv/bin/python') + ''' -m deck run
 Restart=on-failure
 RestartSec=60
@@ -88,6 +99,7 @@ def install(home, source):
     preflight()  # Check capabilities before creating installation files.
     import venv
     destination, unit, config = paths(home)
+    unit_content = unit_text(destination)  # Validate before creating any files.
     for path in (destination, unit, config):
         require_safe(path)
     if destination.exists() or unit.exists():
@@ -119,7 +131,7 @@ def install(home, source):
             shutil.rmtree(destination)
         raise
     # Publication errors are uncertain: keep marker and files for explicit recovery.
-    publish_unit(unit, unit_text(destination))
+    publish_unit(unit, unit_content)
     subprocess.run(['systemctl', '--user', 'daemon-reload'], check=True, timeout=15,
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     marker.unlink()

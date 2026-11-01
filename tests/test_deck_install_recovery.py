@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import subprocess
 import tempfile
+import shutil
 import sys
 import unittest
 from unittest.mock import patch
@@ -294,3 +295,82 @@ with patch('deck.client.os.fsync', side_effect=lambda _: os._exit(77)):
         self.assertEqual(temporary[0].stat().st_mode & 0o777, 0o600)
         self.store.write('config.json', self.new)
         self.assertEqual(self.store.read('config.json'), self.new)
+
+
+class UnitSerializationTests(unittest.TestCase):
+    def test_supported_absolute_paths_and_literal_specifiers(self):
+        for value in ('/tmp/normal', '/tmp/space name', '/tmp/percent%name', '/tmp/café % name'):
+            with self.subTest(value=value):
+                text = unit_text(Path(value))
+                self.assertIn('WorkingDirectory=' + value.replace('%', '%%') + '/source\n', text)
+                self.assertIn('ExecStart="' + value.replace('%', '%%') + '/venv/bin/python" -m deck run\n', text)
+                self.assertNotIn('WorkingDirectory="', text)
+
+    def test_unsupported_paths_rejected_before_install_files(self):
+        import unicodedata
+        values = ['relative', '/tmp/../elsewhere', '/tmp/double"quote', "/tmp/single'quote", '/tmp/back\\slash']
+        values += ['/tmp/control' + chr(c) for c in range(160) if unicodedata.category(chr(c)) == 'Cc']
+        values += ['/tmp/surrogate\udcff']
+        for value in values:
+            with self.subTest(value=repr(value)), self.assertRaises(ValueError):
+                unit_text(Path(value))
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory) / 'unsupported"home'
+            with patch('deck.install.preflight'), self.assertRaises(ValueError):
+                install(home, Path(directory))
+            self.assertFalse(home.exists())
+
+    @unittest.skipUnless(shutil.which('systemd-analyze'), 'Requires local systemd parser, never a running service')
+    def test_real_systemd_parser_rejects_legacy_and_accepts_supported_matrix(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            # verify resolves dependencies even when no manager is running.
+            # Supply only synthetic targets; do not depend on host unit files or
+            # remove DefaultDependencies from the generated service under test.
+            for target in ('sysinit', 'basic', 'shutdown', 'network-online', 'default'):
+                (root / (target + '.target')).write_text(
+                    '[Unit]\nDescription=Synthetic parser target\nDefaultDependencies=no\n')
+            # This is a user unit. Keep the verifier's runtime artifacts in the
+            # synthetic tree too: system scope otherwise needs host /run/systemd.
+            runtime = root / 'runtime'
+            runtime.mkdir(mode=0o700)
+            analyze = shutil.which('systemd-analyze')
+            env = {'PATH': os.defpath, 'LC_ALL': 'C', 'SYSTEMD_UNIT_PATH': str(root),
+                   'XDG_RUNTIME_DIR': str(runtime),
+                   'SYSTEMD_LOG_LEVEL': 'warning', 'SYSTEMD_LOG_TARGET': 'console'}
+
+            def verify(unit):
+                return REAL_RUN([analyze, '--user', 'verify', '--man=no', '--generators=no', str(unit)],
+                                env=env, capture_output=True, text=True, timeout=15)
+
+            for index, name in enumerate(('normal', 'space name', 'percent%name', 'café % name')):
+                destination = root / name
+                (destination / 'source').mkdir(parents=True)
+                executable = destination / 'venv/bin/python'
+                executable.parent.mkdir(parents=True)
+                # verify only checks the executable path: this file is never run.
+                executable.write_text('# synthetic executable; parser-only check\n')
+                executable.chmod(0o700)
+                unit = root / ('probe' + str(index) + '.service')
+                text = unit_text(destination)
+                unit.write_text(text)
+                result = verify(unit)
+                self.assertEqual(result.returncode, 0,
+                                 'Synthetic case ' + str(index) + ': ' + result.stderr.replace(str(root), '<synthetic>')[:2000])
+                if index == 0:
+                    working = str(destination / 'source')
+                    unit.write_text(text.replace('WorkingDirectory=' + working, 'WorkingDirectory="' + working + '"'))
+                    legacy = verify(unit)
+                    self.assertNotEqual(legacy.returncode, 0)
+                    self.assertIn('path is not absolute', legacy.stderr)
+                # The isolated environment must still enforce real verifier
+                # checks, rather than accepting every syntactically valid unit.
+                unit.write_text(text)
+                executable.unlink()
+                self.assertNotEqual(verify(unit).returncode, 0)
+                executable.write_text('# synthetic executable; never run\n')
+                executable.chmod(0o700)
+                unit.write_text(text.replace('[Unit]\n', '[Unit]\nRequires=missing-proof.target\n', 1))
+                self.assertNotEqual(verify(unit).returncode, 0)
+                unit.write_text(text)
+                self.assertEqual(verify(unit).returncode, 0)

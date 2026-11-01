@@ -212,3 +212,117 @@ class RecoveryTests(unittest.TestCase):
         pairing.assert_not_called()
         self.assertIn('doctor', out.getvalue())
         self.assertNotIn('PRIVATE', out.getvalue())
+
+
+class PairingReasonTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.file = self.root / 'PRIVATE_FILE'
+        self.file.write_bytes(b'PRIVATE_SAVE')
+        self.store = Store(self.root / 'state')
+        self.old = {'pairing_id': 'old', 'device_token': 'PRIVATE_OLD'}
+        self.store.write('config.json', self.old)
+        self.store.write('state.json', {'pairing_id': 'old', 'queue': {'synthetic': True}})
+        self.before = self.store.read('state.json')
+        self.clock = 0
+        self.calls = []
+        self.response = {'status': 'pending'}
+        self.start_error = None
+        self.transport = Transport()
+        self.transport.post = self.post
+
+    def post(self, route, payload, token=None):
+        self.calls.append(route)
+        if route.endswith('/start'):
+            if self.start_error:
+                raise self.start_error
+            return {'verification_uri': self.transport.origin + '/devices/approve',
+                    'device_code': 'PRIVATE_DEVICE', 'user_code': 'SYNTHETIC-CODE',
+                    'expires_in': 20, 'interval': 5}
+        if isinstance(self.response, Exception):
+            raise self.response
+        return self.response
+
+    def run_failure(self):
+        def sleep(seconds):
+            self.clock += seconds
+        with contextlib.redirect_stdout(io.StringIO()) as output, self.assertRaises(ValueError):
+            pair(self.store, self.transport, str(self.file), appid=999999, mode='metadata',
+                 ask=lambda _: 'yes', sleep=sleep, monotonic=lambda: self.clock)
+        text = output.getvalue()
+        self.assertNotIn('PRIVATE_', text)
+        self.assertNotIn(str(self.file), text)
+        self.assertEqual(self.store.read('config.json'), self.old)
+        self.assertEqual(self.store.read('state.json'), self.before)
+        return text
+
+    def test_pending_deadline_does_not_invent_stale_approval_root_cause(self):
+        text = self.run_failure()
+        self.assertIn('approval for this attempt was not observed', text)
+        self.assertIn('cause is not established', text)
+        self.assertEqual(text.count('Waiting for approval'), 1)
+        self.assertNotIn('service reports this pairing attempt expired', text)
+
+    def test_network_deadline_and_start_timeout_are_distinct(self):
+        self.response = urllib.error.URLError(TimeoutError('PRIVATE_NETWORK_DETAIL'))
+        self.assertIn('Approval status is unknown', self.run_failure())
+        self.start_error = TimeoutError('PRIVATE_TIMEOUT')
+        self.assertIn('Pairing connection unavailable', self.run_failure())
+
+    def test_explicit_expired_denied_and_invalid_response(self):
+        for status, expected in (('expired', 'attempt expired'), ('denied', 'attempt denied'),
+                                 ('PRIVATE_UNKNOWN', 'not understood')):
+            self.clock = 0
+            self.response = {'status': status, 'body': 'PRIVATE_RESPONSE'}
+            self.assertIn(expected, self.run_failure())
+
+    def test_http_errors_do_not_read_or_echo_response_body(self):
+        for code, expected in ((400, 'cannot be distinguished'), (410, 'cannot be distinguished'),
+                               (401, 'request rejected'), (403, 'request rejected')):
+            self.clock = 0
+            body = io.BytesIO(b'PRIVATE_RESPONSE_TOKEN')
+            self.response = urllib.error.HTTPError('https://example.test/PRIVATE_PATH', code,
+                                                  'PRIVATE_REASON', {}, body)
+            self.assertIn(expected, self.run_failure())
+            self.assertEqual(body.tell(), 0)
+
+    def test_concurrent_pairing_is_preserved_and_reported(self):
+        original = self.post
+        newer = {'pairing_id': 'newer', 'device_token': 'PRIVATE_NEWER'}
+        def changed(route, payload, token=None):
+            if route.endswith('/poll'):
+                self.store.write('config.json', newer)
+                return {'status': 'approved', 'device_token': 'PRIVATE_LATE', 'expires_in': 1000,
+                        'appid': 999999, 'scopes': ['saves.metadata']}
+            return original(route, payload, token)
+        self.transport.post = changed
+        with contextlib.redirect_stdout(io.StringIO()) as output, self.assertRaises(ValueError):
+            pair(self.store, self.transport, str(self.file), appid=999999, mode='metadata',
+                 ask=lambda _: 'yes', sleep=lambda _: None)
+        self.assertIn('Another local pairing changed', output.getvalue())
+        self.assertNotIn('PRIVATE_', output.getvalue())
+        self.assertEqual(self.store.read('config.json'), newer)
+        self.assertEqual(self.store.read('state.json'), self.before)
+
+    def test_setup_exposes_specific_reason_before_generic_incomplete_message(self):
+        self.response = {'status': 'denied'}
+        def pairing(*args, **kwargs):
+            return pair(*args, sleep=lambda _: None, **kwargs)
+        with patch('deck.setup.os.geteuid', return_value=1000), \
+             patch('deck.setup.Path.home', return_value=self.root / 'fresh-home'), \
+             patch('deck.setup.install'), patch('deck.setup.Store', return_value=self.store), \
+             patch('deck.setup.Transport', return_value=self.transport), \
+             patch('deck.setup.pair', side_effect=pairing), \
+             patch('deck.setup.subprocess.run') as command, \
+             contextlib.redirect_stdout(io.StringIO()) as output:
+            self.assertEqual(setup(self.transport.origin, str(self.file), appid=999999,
+                                   mode='metadata', enable=True, ask=lambda _: 'yes'), 1)
+        text = output.getvalue()
+        self.assertIn('attempt denied', text)
+        self.assertIn('Setup incomplete', text)
+        self.assertNotIn('PRIVATE_', text)
+        command.assert_not_called()
+        self.assertEqual(self.store.read('config.json'), self.old)
+        self.assertEqual(self.store.read('state.json'), self.before)
