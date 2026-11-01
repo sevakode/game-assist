@@ -114,7 +114,7 @@ class NativeFormTests(unittest.TestCase):
 
     def test_oauth_consent_form_retains_guards_pkce_state_and_issuer(self):
         location, client, verifier = self.pending_oauth()
-        fields = self.form(location, '')
+        fields = self.form(location, '/oauth/consent')
         self.reject_invalid_submissions('/oauth/consent', fields)
         self.assertIsNotNone(self.app.state.provider.get_pending(fields['request']))
         consent = self.submit('/oauth/consent', fields)

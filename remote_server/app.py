@@ -307,9 +307,20 @@ class ResponseSecurity:
         async def secure(message):
             if message['type'] == 'http.response.start':
                 message['headers'] = [(k,v) for k,v in message['headers'] if k.lower() not in (b'access-control-allow-origin', b'cache-control', b'referrer-policy')]
+                # Only a successfully rendered consent document may extend form-action.
+                callback_source = scope.get('state', {}).get('consent_callback_source')
+                form_action = b"'self'"
+                if (scope['path'] == '/oauth/consent' and scope['method'] == 'GET'
+                        and message['status'] == 200 and isinstance(callback_source, str)
+                        and re.fullmatch(r'https://[A-Za-z0-9.-]+(?::[0-9]+)?/[A-Za-z0-9/_~.-]*', callback_source)):
+                    # Replace CSP only on this validated consent document. Other
+                    # endpoints may carry stricter policies which must intersect.
+                    message['headers'] = [(k, v) for k, v in message['headers']
+                                          if k.lower() != b'content-security-policy']
+                    form_action += b' ' + callback_source.encode('ascii')
                 # Native POST forms need their exact Origin; never disclose URL paths/query.
                 message['headers'] += [(b'cache-control', b'no-store'), (b'referrer-policy', b'strict-origin'),
-                    (b'x-content-type-options', b'nosniff'), (b'content-security-policy', (b"default-src 'none'; style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'" + (b"; script-src 'self'; connect-src 'self'" if scope['path'] in ('/import', '/games') else b"; script-src 'self'" if scope['path']=='/start' else b"; script-src 'self'; connect-src 'none'" if scope['path']=='/diagnostics' else b''))),
+                    (b'x-content-type-options', b'nosniff'), (b'content-security-policy', (b"default-src 'none'; style-src 'self'; form-action " + form_action + b"; frame-ancestors 'none'; base-uri 'none'" + (b"; script-src 'self'; connect-src 'self'" if scope['path'] in ('/import', '/games') else b"; script-src 'self'" if scope['path']=='/start' else b"; script-src 'self'; connect-src 'none'" if scope['path']=='/diagnostics' else b''))),
                     (b'strict-transport-security', b'max-age=31536000')]
             await send(message)
         return await self.app(scope, receive, secure)
@@ -815,7 +826,15 @@ def create_app(config=None, steam=None, database=None, download_dir=None, achiev
             if not pending:
                 raise HTTPException(400, 'Expired authorization request')
             client = await provider.get_client(pending['client_id'])
-            client_label = ((client.client_name or 'Unnamed client') + ' — ' + pending['redirect_uri']) if client else 'Unknown client'
+            callback_uri = pending['redirect_uri']
+            if (not client or callback_uri not in config.redirect_uris
+                    or callback_uri not in [str(uri) for uri in client.redirect_uris or []]):
+                raise HTTPException(400, 'Invalid authorization callback')
+            # CSP cannot express exact query matching. Only representable exact
+            # HTTPS callback URLs receive this document-scoped allowance.
+            if re.fullmatch(r'https://[A-Za-z0-9.-]+(?::[0-9]+)?/[A-Za-z0-9/_~.-]*', callback_uri):
+                request.state.consent_callback_source = callback_uri
+            client_label = (client.client_name or 'Unnamed client') + ' — ' + callback_uri
             return page('Подключить помощника', ui.consent_body(session['csrf'],req,client_label,pending['scopes']))
         data = await form(request,session,config.issuer)
         if set(data)-{'csrf','request','library_read'} or data.get('library_read') not in (None,'yes'):

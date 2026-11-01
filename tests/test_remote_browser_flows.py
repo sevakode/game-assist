@@ -259,19 +259,53 @@ class BrowserFlowTests(unittest.TestCase):
         page=self.client.get(target,headers=HTML)
         self.assertEqual(page.status_code,200)
         form=FormReader(page.text).forms[0]
+        self.assertEqual(form['action'], '/oauth/consent')
+        self.assertNotIn('<script', page.text)
+        self.assertNotIn('onsubmit', page.text)
+        self.assertNotIn('disabled', page.text)
+        policy = page.headers['content-security-policy']
+        baseline = self.client.get('/', headers=HTML).headers['content-security-policy']
+        self.assertEqual(page.headers.get_list('content-security-policy'), [policy])
+        self.assertEqual(policy, baseline.replace("form-action 'self'", "form-action 'self' " + service.REDIRECT))
+        injected = self.client.get(target + '&redirect_uri=https%3A%2F%2Funtrusted.example%2Fcallback', headers=HTML)
+        self.assertEqual(injected.headers['content-security-policy'], policy)
         self.client.get('/',headers=HTML) # Navigation cancellation never approves.
         with self.app.state.store.db() as db:
             self.assertEqual(db.execute('SELECT count(*) FROM oauth_codes').fetchone()[0],0)
             self.assertEqual(db.execute('SELECT count(*) FROM oauth_tokens').fetchone()[0],0)
         response=self.post('/oauth/consent',form['fields'])
         self.assertEqual(response.status_code,303)
-        self.assertEqual(urlsplit(response.headers['location']).netloc,urlsplit(service.REDIRECT).netloc)
+        callback = urlsplit(response.headers['location'])
+        self.assertEqual(callback._replace(query='', fragment='').geturl(), service.REDIRECT)
+        values = parse_qs(callback.query)
+        self.assertEqual(set(values), {'code', 'state', 'iss'})
+        self.assertEqual(values['state'], ['synthetic-test-state'])
+        self.assertEqual(values['iss'], [service.ORIGIN + '/'])
+        self.assertEqual(response.content, b'')
+        self.assertEqual(response.headers.get_list('content-security-policy'), [baseline])
+        self.assertNotIn('set-cookie', response.headers)
+        self.assertEqual(response.headers['cache-control'], 'no-store')
         repeat=self.post('/oauth/consent',form['fields'])
         self.assertEqual(repeat.status_code,400)
         self.assertIn('text/html',repeat.headers['content-type'])
+        for recovery in (repeat, self.client.get(target, headers={'accept':'text/html'})):
+            self.assertEqual(recovery.status_code, 400)
+            self.assertEqual(recovery.headers.get_list('content-security-policy'), [baseline])
+            self.assertIn('Начни подключение заново из AI-клиента', recovery.text)
+            self.assertIn('не подтверждает подключение', recovery.text)
+            self.assertIn('/connect/claude', FormReader(recovery.text).links)
+            self.assertNotIn('location', recovery.headers)
+            self.assertNotIn(values['code'][0], recovery.text)
+            self.assertNotIn(form['fields']['request'], recovery.text)
         with self.app.state.store.db() as db:
+            self.assertEqual(db.execute('SELECT count(*) FROM oauth_pending').fetchone()[0],0)
             self.assertEqual(db.execute('SELECT count(*) FROM oauth_codes').fetchone()[0],1)
             self.assertEqual(db.execute('SELECT count(*) FROM oauth_tokens').fetchone()[0],0)
+        exchange = {'client_id':registration['client_id'], 'grant_type':'authorization_code',
+                    'code':values['code'][0], 'redirect_uri':service.REDIRECT,
+                    'code_verifier':'a'*64, 'resource':service.ORIGIN+'/mcp'}
+        self.assertEqual(self.client.post('/token', data=exchange).status_code, 200)
+        self.assertEqual(self.client.post('/token', data=exchange).status_code, 400)
 
     def test_unknown_selected_game_has_local_recovery_and_no_data(self):
         self.sign_in()
