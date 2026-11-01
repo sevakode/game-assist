@@ -43,6 +43,7 @@ from .database import Database
 from .achievements import AchievementReader
 from .library_reader import LibraryReader
 from . import ui, discovery
+from .data_handling import data_handling_page
 from .browser_errors import http_exception as browser_http_exception, wants_browser_error, error_page
 from .games import CURRENT_GAME_IDS, CATALOG_REVISION, GAMES, DISCOVERY_TITLES, discovery_catalog
 
@@ -476,6 +477,11 @@ def create_app(config=None, steam=None, database=None, download_dir=None, achiev
             return page('Настройка Deck', ui.setup_body(config.issuer,None), head=discovery.public_head(config.issuer, '/setup'))
         command = "cd ~/Downloads &&\n" + "printf '%s  deck-companion.zip\\n' " + shlex.quote(archive_checksum) + " | sha256sum -c - &&\n" + "mkdir deck-companion &&\npython3 -I -m zipfile -e deck-companion.zip deck-companion &&\ncd deck-companion &&\npython3 -m deck setup --server " + shlex.quote(config.issuer)
         return page('Настройка Deck', ui.setup_body(config.issuer,archive_checksum,command), head=discovery.public_head(config.issuer, '/setup'))
+
+    async def data_handling(request):
+        response = data_handling_page()
+        response.headers['X-Robots-Tag'] = 'noindex, nofollow'
+        return response
 
     async def stylesheet(request):
         return FileResponse(Path(__file__).parent/'ui.css',media_type='text/css')
@@ -999,7 +1005,7 @@ def create_app(config=None, steam=None, database=None, download_dir=None, achiev
     identify_authorization_errors(app.routes, provider.authorization_issuer)
     app.add_exception_handler(HTTPException,browser_http_exception)
     app.routes.insert(0,Route('/.well-known/oauth-authorization-server',metadata))
-    app.routes.extend([Route('/import',manual_import_page),Route('/assets/import.js',import_script),Route('/assets/belmont-parser.js',parser_script),Route('/v1/browser/observations',manual_import,methods=['POST']),Route('/assets/console.css',stylesheet),Route('/setup',setup_page),Route('/downloads/deck-companion.zip',download),Route('/downloads/deck-companion.zip.sha256',download_checksum),Route('/healthz',health),Route('/',home),Route('/games',games),Route('/connect/claude',connect_claude),Route('/login',login),Route('/steam/callback',callback),
+    app.routes.extend([Route('/data-handling',data_handling,methods=['GET']),Route('/import',manual_import_page),Route('/assets/import.js',import_script),Route('/assets/belmont-parser.js',parser_script),Route('/v1/browser/observations',manual_import,methods=['POST']),Route('/assets/console.css',stylesheet),Route('/setup',setup_page),Route('/downloads/deck-companion.zip',download),Route('/downloads/deck-companion.zip.sha256',download_checksum),Route('/healthz',health),Route('/',home),Route('/games',games),Route('/connect/claude',connect_claude),Route('/login',login),Route('/steam/callback',callback),
         Route('/v1/devices/pair/start',pair_start,methods=['POST']),Route('/v1/devices/pair/poll',pair_poll,methods=['POST']),
         Route('/devices/approve',approve_device,methods=['GET','POST']),Route('/v1/device/observations',ingest,methods=['POST']),
         Route('/oauth/consent',consent,methods=['GET','POST']),Route('/account/library/permission',library_permission,methods=['POST']),Route('/account/library/refresh',refresh_library,methods=['POST']),Route('/account/achievements/refresh',refresh_achievements,methods=['POST']),Route('/account/games/add',add_game,methods=['POST']),Route('/account/games',choose_games,methods=['POST']),Route('/account/games/permissions',game_permission,methods=['POST']),Route('/account/games/revoke',revoke_selected_game,methods=['POST']),Route('/account/notifications',notification_settings,methods=['POST']),Route('/account/notifications/read',notification_read,methods=['POST']),Route('/account/revoke',revoke,methods=['POST']),Route('/logout',logout,methods=['POST'])])
