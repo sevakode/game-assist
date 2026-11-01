@@ -71,3 +71,6 @@ fieldset{border:1px solid var(--line);padding:18px;margin:20px 0;min-width:0}leg
 @media(max-width:700px){.system-nav{flex-wrap:wrap;overflow:visible}.nav-advanced{flex:0 0 auto;margin-top:0;border-top:0}.nav-advanced>summary{font-size:12px;padding:12px 8px;min-height:48px}.nav-advanced[open]{flex-basis:100%;background:var(--surface);padding:4px 8px}.nav-advanced a{justify-content:flex-start}.onboarding .other-chat{margin-left:0}.evidence-status dl{grid-template-columns:1fr;gap:12px}.evidence-status dl>div{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.1fr);gap:10px}.evidence-status dd{margin:0}}
 .onboarding #phone-prompt{height:136px;min-height:112px}
 @media(max-width:700px){.onboarding:has(#phone-prompt)>.setup-rail{display:none}.onboarding #phone-prompt{height:120px}}
+.manual-ai-export{border-top:1px solid var(--line);margin-top:18px;padding-top:8px}
+.manual-ai-export>button{margin-top:12px}
+.manual-ai-export [role=status]{font-size:13px;color:var(--focus);margin-top:10px}

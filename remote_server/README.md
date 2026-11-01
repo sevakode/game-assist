@@ -79,7 +79,11 @@ than the configured site are denied. Native/server clients do not need CORS.
 - Host/proxy rate limiting is deliberately coarse: no forwarded-IP trust. Shared proxy
   IP can hit the cap. Tune deployment limits only after measuring a controlled trial.
 - No live Steam calls in tests. OpenID links identity only, not private cloud saves.
-  Steam achievements are not synchronized by this service yet. No server-side LLM.
+  Unlocked achievements can be refreshed by an explicit, bounded request only after
+  per-game opt-in and operator API configuration. Page loads, permission grants and
+  MCP reads do not fetch them; there is no background synchronization. Real Steam
+  source behavior and authenticated Claude/ChatGPT flows remain unverified by these
+  synthetic tests. No server-side LLM.
 - Accounts, Steam links and consumed-token replay records persist. The revoke button
   is not full account deletion. A published retention/account-deletion flow is required
   before offering this publicly; no background cleanup policy is falsely promised.
@@ -396,10 +400,24 @@ Verified identity sources:
 This separate **account-level `library.read` opt-in** is represented by an enabled
 `library_cache` consent row; it is not a per-game data grant. Operator API access
 must be configured first; players never provide keys. Exact POST forms:
-`/account/library/permission` takes `csrf,enabled=yes|no`, and
-`/account/library/refresh` takes only `csrf`. Both require the existing site session
-and exact Origin. Nothing is fetched on login, page load, MCP reads or consent alone.
+`/account/library/permission` takes `csrf,enabled=yes|no` and optionally
+`action=enable_and_refresh` **only with `enabled=yes`**. The visible initial button
+“Разрешить и загрузить игры” explicitly saves consent and requests the list in one
+action. Omitting `action` retains the permission-only, no-network contract.
+`/account/library/refresh` takes only `csrf` and uses the same bounded fetch path.
+Both require the existing site session, CSRF and exact Origin. Nothing is fetched
+on login, page load, MCP reads or permission-only consent.
 The owner/SteamID is derived exclusively from the authenticated session.
+
+Consent is saved before the fetch. A source failure leaves consent enabled but
+reports the list as unavailable, not loaded or zero-owned. A rate limit reports
+that the new request did not start and links back to the current library state.
+The existing cooldown, quotas and shared reader slots also bound repeated clicks.
+The original live session, owner and CSRF are rechecked transactionally before
+I/O and before saving its result; the consent generation and refresh nonce must
+still match. Revocation, revoke/regrant, logout or expiry cannot persist a late
+response under a different grant/session. This live-session check also hardens
+the existing manual-refresh path; it does not change OAuth scopes or other readers.
 
 The fixed public HTTPS `IPlayerService/GetOwnedGames/v1/` request uses the operator
 key header and `input_json` with SteamID, `include_appinfo=true` and

@@ -45,6 +45,7 @@ from .database import Database
 from .achievements import AchievementReader
 from .library_reader import LibraryReader
 from . import ui, discovery
+from .ai_export import ManualAIExport
 from .data_handling import data_handling_page
 from .browser_errors import http_exception as browser_http_exception, wants_browser_error, error_page
 from .games import CURRENT_GAME_IDS, CATALOG_REVISION, GAMES, DISCOVERY_TITLES, discovery_catalog
@@ -308,7 +309,7 @@ class ResponseSecurity:
                 message['headers'] = [(k,v) for k,v in message['headers'] if k.lower() not in (b'access-control-allow-origin', b'cache-control', b'referrer-policy')]
                 # Native POST forms need their exact Origin; never disclose URL paths/query.
                 message['headers'] += [(b'cache-control', b'no-store'), (b'referrer-policy', b'strict-origin'),
-                    (b'x-content-type-options', b'nosniff'), (b'content-security-policy', (b"default-src 'none'; style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'" + (b"; script-src 'self'; connect-src 'self'" if scope['path']=='/import' else b"; script-src 'self'" if scope['path']=='/start' else b"; script-src 'self'; connect-src 'none'" if scope['path']=='/diagnostics' else b''))),
+                    (b'x-content-type-options', b'nosniff'), (b'content-security-policy', (b"default-src 'none'; style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'" + (b"; script-src 'self'; connect-src 'self'" if scope['path'] in ('/import', '/games') else b"; script-src 'self'" if scope['path']=='/start' else b"; script-src 'self'; connect-src 'none'" if scope['path']=='/diagnostics' else b''))),
                     (b'strict-transport-security', b'max-age=31536000')]
             await send(message)
         return await self.app(scope, receive, secure)
@@ -408,6 +409,7 @@ def create_app(config=None, steam=None, database=None, download_dir=None, achiev
     config = config or Config.from_env()
     database = database or Database(config.db_path, database_url=config.database_url)
     store = Store(config.db_path, database=database)
+    ai_export = ManualAIExport(store)
     steam = steam or SteamService()
     achievements = achievement_reader or AchievementReader()
     store.achievements_available = achievements.configured
@@ -437,7 +439,7 @@ def create_app(config=None, steam=None, database=None, download_dir=None, achiev
         transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=True,
             allowed_hosts=[urlsplit(config.issuer).netloc], allowed_origins=[config.issuer]))
 
-    @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=False))
+    @mcp.tool(title='Read permitted game progress', annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=False))
     def get_progress() -> dict:
         """Read only this account's permitted spoiler-filtered latest summary. No IDs accepted."""
         token = get_access_token()
@@ -445,7 +447,7 @@ def create_app(config=None, steam=None, database=None, download_dir=None, achiev
             raise ValueError('Authentication required')
         return store.projection(token.subject)
 
-    @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=False))
+    @mcp.tool(title='Clarify the next step', annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=False))
     def suggest_next_step() -> dict:
         """No future story facts; ask for known context when mapping is not established."""
         token = get_access_token()
@@ -453,7 +455,7 @@ def create_app(config=None, steam=None, database=None, download_dir=None, achiev
             raise ValueError('Authentication required')
         return {'progress': store.projection(token.subject), 'suggestion': 'What is your current goal and what have you already discovered?', 'confidence': 'unknown'}
 
-    @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=False))
+    @mcp.tool(title='Check connection status', annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=False))
     def get_connection_status() -> dict:
         """Explain permitted data availability and safe user actions; no IDs accepted.
 
@@ -467,7 +469,7 @@ def create_app(config=None, steam=None, database=None, download_dir=None, achiev
         return connection_status(store.projection(token.subject, cleanup_expired=False),
             config.issuer, achievements_available=store.achievements_available, now=time.time())
 
-    @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=False))
+    @mcp.tool(title='Read cached game library', annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=False))
     def get_library() -> dict:
         """Read cached AppIDs and names only with library.read AND account opt-in.
 
@@ -527,7 +529,12 @@ def create_app(config=None, steam=None, database=None, download_dir=None, achiev
         step = request.query_params.get('step', 'connect')
         if step not in ('connect', 'choose', 'play'):
             raise HTTPException(400, 'Invalid onboarding step')
-        return page('Начать играть', ui.start_body(config.issuer + '/mcp', step))
+        # Explicit public topic only. Never read session, labels, grants or activity here.
+        requested = request.query_params.getlist('game')
+        if len(requested) > 1:
+            raise HTTPException(400, 'One game topic required')
+        appid = parse_appid(requested[0]) if requested else None
+        return page('Начать играть', ui.start_body(config.issuer + '/mcp', step, appid))
 
     async def onboarding_script(request):
         return PlainTextResponse((Path(__file__).with_name('onboarding.js')).read_text(), media_type='application/javascript')
@@ -553,7 +560,22 @@ def create_app(config=None, steam=None, database=None, download_dir=None, achiev
             raise HTTPException(400,'Invalid game') from None
         if requested is not None and focus not in selected_ids:
             raise HTTPException(404,'Selected game unavailable')
-        return page('Твоя игровая станция', ui.home_body(store.projection(session['owner']),session['csrf'],inbox,capabilities={'mcp_url':config.issuer+'/mcp','discovery_catalog':discovery_catalog(store.achievements_available),'owned_library':store.library(session['owner']),'catalog':catalog,'catalog_revision':store.catalog_revision(session['owner'],catalog),'selected_appid':focus}))
+        return page('Твоя игровая станция', ui.home_body(store.projection(session['owner']),session['csrf'],inbox,capabilities={'mcp_url':config.issuer+'/mcp','discovery_catalog':discovery_catalog(store.achievements_available),'owned_library':store.library(session['owner']),'catalog':catalog,'catalog_revision':store.catalog_revision(session['owner'],catalog),'selected_appid':focus,'starter_appid':focus if requested is not None else None,'ai_export_binding':ai_export.issue(session, focus)}))
+
+    async def export_ai_snapshot(request):
+        try:
+            session = store.session(request, True)
+            data = await form(request, session, config.issuer)
+            if set(data) != {'csrf', 'appid', 'binding'} or not isinstance(data['binding'], str) or len(data['binding']) > 96:
+                raise HTTPException(422, 'Invalid export request')
+            appid = parse_appid(data['appid'])
+            result = ai_export.construct(session, appid, data['binding'])
+            return JSONResponse(result)
+        except HTTPException as exc:
+            return JSONResponse({'error': 'Свежая сводка недоступна. Обнови страницу и проверь вход, выбранную игру и доступ.'}, status_code=exc.status_code)
+
+    async def ai_export_script(request):
+        return PlainTextResponse(Path(__file__).with_name('ai-export.js').read_text(), media_type='application/javascript')
 
     async def login(request):
         next_path = request.query_params.get('next', '/')
@@ -883,31 +905,58 @@ def create_app(config=None, steam=None, database=None, download_dir=None, achiev
             else:store.revoke_scope(db,session['owner'],appid,scope)
         return RedirectResponse('/games?game='+str(appid)+'#permissions',303)
 
+    def require_library_session(db, session):
+        # Check the original session inside the same transaction as the cache
+        # mutation, including after network I/O. A newer login cannot rescue it.
+        if not db.execute('SELECT 1 FROM sessions WHERE hash=? AND owner=? AND csrf=? AND expires>?',
+                          (session['hash'],session['owner'],session['csrf'],time.time())).fetchone():
+            raise HTTPException(401,'Sign in on this website first')
+
     async def library_permission(request):
         session=store.session(request,True)
         data=await form(request,session,config.issuer)
-        if set(data)!={'csrf','enabled'} or data['enabled'] not in ('yes','no'):raise HTTPException(422,'Explicit library choice required')
+        request.state.browser_return='/games#steam-library'
+        if (set(data)-{'csrf','enabled','action'} or not {'csrf','enabled'}<=set(data)
+                or data['enabled'] not in ('yes','no')
+                or ('action' in data and (data['action']!='enable_and_refresh' or data['enabled']!='yes'))):
+            raise HTTPException(422,'Explicit library choice required')
         if data['enabled']=='yes' and not libraries.configured:raise HTTPException(503,'Operator library access is not configured')
         with store.db() as db:
+            require_library_session(db,session)
             if data['enabled']=='no':db.execute('DELETE FROM library_cache WHERE owner=?',(session['owner'],))
             else:
                 for row in db.execute('SELECT owner FROM library_cache WHERE expires<? AND payload IS NOT NULL LIMIT 100',(time.time(),)).fetchall():
                     db.execute("UPDATE library_cache SET payload=NULL,status='expired' WHERE owner=?",(row['owner'],))
                 if not db.execute('SELECT 1 FROM library_cache WHERE owner=?',(session['owner'],)).fetchone() and db.execute('SELECT count(*) FROM library_cache').fetchone()[0]>=LIBRARY_ROWS_GLOBAL:raise HTTPException(429,'Library cache capacity reached')
                 db.execute('INSERT INTO library_cache(owner,consent_id) VALUES(?,?) ON CONFLICT(owner) DO NOTHING',(session['owner'],secrets.token_urlsafe(32)))
+                epoch=db.execute('SELECT consent_id FROM library_cache WHERE owner=?',(session['owner'],)).fetchone()['consent_id']
+        if data.get('action')=='enable_and_refresh':
+            # Permission-only callers retain their no-I/O contract. Bind the
+            # combined action to this exact grant, not a later revoke/regrant.
+            request.state.library_permission_saved=True
+            await fetch_library(session,expected_consent=epoch)
         return RedirectResponse('/games#steam-library',303)
 
     async def refresh_library(request):
         session=store.session(request,True)
         data=await form(request,session,config.issuer)
+        request.state.browser_return='/games#steam-library'
         if set(data)!={'csrf'}:raise HTTPException(422,'Only library refresh is accepted')
+        await fetch_library(session)
+        return RedirectResponse('/games#steam-library',303)
+
+    async def fetch_library(session, *, expected_consent=None):
+        """One bounded refresh path for explicit opt-in+fetch and manual retry."""
         if not libraries.configured:raise HTTPException(503,'Operator library access is not configured')
         owner=session['owner']
         store.limit('library-owner:'+digest(owner),4,3600);store.limit('library-global',60,3600)
         if not achievement_slots.acquire(blocking=False):raise HTTPException(429,'Steam reader busy')
         try:
             with store.db() as db:
+                require_library_session(db,session)
                 row=db.execute('SELECT c.*,u.steamid FROM library_cache c JOIN users u ON u.id=c.owner WHERE c.owner=?',(owner,)).fetchone()
+                if expected_consent is not None and (not row or row['consent_id']!=expected_consent):
+                    raise HTTPException(409,'Library permission changed during refresh')
                 if not row:raise HTTPException(403,'Explicit library.read permission required')
                 now=time.time()
                 if row['attempted_at'] is not None and now-row['attempted_at']<900:raise HTTPException(429,'Refresh available after fifteen minutes')
@@ -918,11 +967,11 @@ def create_app(config=None, steam=None, database=None, download_dir=None, achiev
             status=result['status'] if result.get('status') in ('ok','unavailable','not_configured') else 'unavailable'
             payload=json.dumps(result['games'],ensure_ascii=False,separators=(',',':')) if status=='ok' else None
             with store.db() as db:
+                require_library_session(db,session)
                 if not db.execute('SELECT 1 FROM library_cache WHERE owner=? AND consent_id=? AND refresh_nonce=?',(owner,epoch,nonce)).fetchone():raise HTTPException(409,'Library permission changed during refresh')
                 now=time.time()
                 db.execute('UPDATE library_cache SET payload=?,status=?,received_at=?,expires=?,refresh_nonce=NULL WHERE owner=?',(payload,status,now,now+86400,owner))
         finally:achievement_slots.release()
-        return RedirectResponse('/games#steam-library',303)
 
     async def refresh_achievements(request):
         session=store.session(request,True)
@@ -1047,7 +1096,7 @@ def create_app(config=None, steam=None, database=None, download_dir=None, achiev
     identify_authorization_errors(app.routes, provider.authorization_issuer)
     app.add_exception_handler(HTTPException,browser_http_exception)
     app.routes.insert(0,Route('/.well-known/oauth-authorization-server',metadata))
-    app.routes.extend([Route('/diagnostics',diagnostics_preview,methods=['GET']),Route('/assets/diagnostics.js',diagnostics_script,methods=['GET']),Route('/start',onboarding),Route('/assets/onboarding.js',onboarding_script),Route('/data-handling',data_handling,methods=['GET']),Route('/import',manual_import_page),Route('/assets/import.js',import_script),Route('/assets/belmont-parser.js',parser_script),Route('/v1/browser/observations',manual_import,methods=['POST']),Route('/assets/console.css',stylesheet),Route('/setup',setup_page),Route('/downloads/deck-companion.zip',download),Route('/downloads/deck-companion.zip.sha256',download_checksum),Route('/healthz',health),Route('/',home),Route('/games',games),Route('/connect/claude',connect_claude),Route('/login',login),Route('/steam/callback',callback),
+    app.routes.extend([Route('/account/ai-export',export_ai_snapshot,methods=['POST']),Route('/assets/ai-export.js',ai_export_script,methods=['GET']),Route('/diagnostics',diagnostics_preview,methods=['GET']),Route('/assets/diagnostics.js',diagnostics_script,methods=['GET']),Route('/start',onboarding),Route('/assets/onboarding.js',onboarding_script),Route('/data-handling',data_handling,methods=['GET']),Route('/import',manual_import_page),Route('/assets/import.js',import_script),Route('/assets/belmont-parser.js',parser_script),Route('/v1/browser/observations',manual_import,methods=['POST']),Route('/assets/console.css',stylesheet),Route('/setup',setup_page),Route('/downloads/deck-companion.zip',download),Route('/downloads/deck-companion.zip.sha256',download_checksum),Route('/healthz',health),Route('/',home),Route('/games',games),Route('/connect/claude',connect_claude),Route('/login',login),Route('/steam/callback',callback),
         Route('/v1/devices/pair/start',pair_start,methods=['POST']),Route('/v1/devices/pair/poll',pair_poll,methods=['POST']),
         Route('/devices/approve',approve_device,methods=['GET','POST']),Route('/v1/device/observations',ingest,methods=['POST']),
         Route('/oauth/consent',consent,methods=['GET','POST']),Route('/account/library/permission',library_permission,methods=['POST']),Route('/account/library/refresh',refresh_library,methods=['POST']),Route('/account/achievements/refresh',refresh_achievements,methods=['POST']),Route('/account/games/add',add_game,methods=['POST']),Route('/account/games',choose_games,methods=['POST']),Route('/account/games/permissions',game_permission,methods=['POST']),Route('/account/games/revoke',revoke_selected_game,methods=['POST']),Route('/account/notifications',notification_settings,methods=['POST']),Route('/account/notifications/read',notification_read,methods=['POST']),Route('/account/revoke',revoke,methods=['POST']),Route('/logout',logout,methods=['POST'])])

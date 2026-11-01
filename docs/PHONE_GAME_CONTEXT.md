@@ -39,7 +39,7 @@ this module. No tools, inputs, scopes or mutations change. Existing diagnostics
 remain compatible; phone clients should use phone_context for the initial
 conversation and treat old import/companion suggestions as optional save paths.
 
-Suggested phone path: Steam login -> optional library opt-in and manual refresh
+Suggested phone path: Steam login -> optional explicit library consent+fetch
 -> user chooses a game -> optional per-game achievements permission and manual
 refresh -> AI OAuth consent -> get_connection_status, get_library only if granted,
 get_progress -> ask current goal and what the player already discovered. If the

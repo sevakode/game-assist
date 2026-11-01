@@ -42,6 +42,9 @@ Five always-on application contracts cover:
 
 - Native HTML form fields parsed from /games; opt-in and manual refresh; rejected
   Origin/CSRF inputs do not fetch Steam or enable the source.
+  The later one-action library candidate submits explicit
+  `action=enable_and_refresh`: its valid initial form now fetches once. Legacy
+  permission-only POSTs remain no-network; see `LIBRARY_ONE_ACTION.md`.
 - Device approval fields from /devices/approve; rejected submissions do not bind
   the pairing or grant scopes; exact game/scopes still required; valid approval
   can be polled for a synthetic device token.

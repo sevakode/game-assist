@@ -79,19 +79,22 @@ class NativeFormTests(unittest.TestCase):
     def submit(self, path, fields):
         return self.client.post(path, data=fields, headers={'origin': ORIGIN, 'accept': 'text/html'})
 
-    def test_library_form_retains_guards_and_opt_in_does_not_fetch(self):
+    def test_library_form_retains_guards_and_explicit_opt_in_fetches_once(self):
         fields = self.form('/games', '/account/library/permission')
+        self.assertEqual(fields['action'], 'enable_and_refresh')
         self.reject_invalid_submissions('/account/library/permission', fields)
         self.assertFalse(self.app.state.store.library(self.owner())['enabled'])
         self.assertEqual(self.library.calls, [])
         self.assertEqual(self.submit('/account/library/permission', fields).status_code, 303)
         self.assertTrue(self.app.state.store.library(self.owner())['enabled'])
-        self.assertEqual(self.library.calls, [])
+        self.assertEqual(len(self.library.calls), 1)
         refresh = self.form('/games', '/account/library/refresh')
         self.reject_invalid_submissions('/account/library/refresh', refresh)
-        self.assertEqual(self.library.calls, [])
-        self.assertEqual(self.submit('/account/library/refresh', refresh).status_code, 303)
         self.assertEqual(len(self.library.calls), 1)
+        with self.app.state.store.db() as db:
+            db.execute('UPDATE library_cache SET attempted_at=0')
+        self.assertEqual(self.submit('/account/library/refresh', refresh).status_code, 303)
+        self.assertEqual(len(self.library.calls), 2)
 
     def test_pair_approval_form_retains_guards_and_exact_game_scope(self):
         pair = self.client.post('/v1/devices/pair/start', json={
@@ -196,10 +199,12 @@ class NativeFormTests(unittest.TestCase):
         with page.expect_navigation():
             page.locator('form[action="/account/library/permission"] button').click()
         self.assertTrue(self.app.state.store.library(self.owner())['enabled'])
-        self.assertEqual(self.library.calls, [])
+        self.assertEqual(len(self.library.calls), 1)
+        with self.app.state.store.db() as db:
+            db.execute('UPDATE library_cache SET attempted_at=0')
         with page.expect_navigation():
             page.locator('form[action="/account/library/refresh"] button').click()
-        self.assertEqual(len(self.library.calls), 1)
+        self.assertEqual(len(self.library.calls), 2)
         for path in ('/account/library/permission', '/account/library/refresh'):
             self.assertIn(('POST', path, ORIGIN, ORIGIN+'/'), records)
 

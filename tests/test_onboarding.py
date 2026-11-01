@@ -120,5 +120,102 @@ class OnboardingTests(unittest.TestCase):
         self.assertEqual(len(library.find('form', action='/account/library/permission')), 1)
         self.assertFalse(library.find('form', action='/account/library/refresh'))
         self.assertEqual(library.find('input', name='enabled')[0]['value'], 'yes')
+        self.assertEqual(library.find('input', name='action')[0]['value'], 'enable_and_refresh')
         enabled = Elements(ui.owned_library_panel('synthetic-csrf', {'configured': True, 'enabled': True}))
         self.assertEqual(len(enabled.find('form', action='/account/library/refresh')), 1)
+
+    def test_explicit_game_helper_preserves_only_clicked_public_topic(self):
+        from html import unescape
+        import re
+        self.sign_in()
+        self.choose([4231820, 1245620, 292030])
+        before = self.catalog()
+        for appid, title in [(1245620, 'Elden Ring'), (292030, 'The Witcher 3: Wild Hunt')]:
+            source = self.client.get('/games?game=' + str(appid)).text
+            primary = Elements(source).find('a', **{'class': 'button primary'})[0]
+            self.assertEqual(primary['href'], '/start?game=' + str(appid))
+            for step, field in [('connect', 'phone-prompt'), ('choose', 'start-prompt')]:
+                result = self.client.get(ui.start_href(appid, step))
+                self.assertEqual(result.status_code, 200)
+                prompt = unescape(re.search(r'<textarea id="' + field + r'"[^>]*>(.*?)</textarea>', result.text, re.S)[1])
+                self.assertIn(f'Хочу обсудить {title} (AppID {appid})', prompt)
+                self.assertIn('не подтверждение запущенной игры или владения', prompt)
+                self.assertIn('Спроси, где я остановился', prompt)
+                self.assertNotIn('Спроси, во что я играю', prompt)
+                self.assertNotIn('Спроси, в какую игру я сейчас играю', prompt)
+                self.assertNotIn('currentHealth', prompt)
+                self.assertNotIn('csrf', prompt)
+                self.assertNotIn('AppID 4231820', prompt)
+        self.assertEqual(before, self.catalog())
+
+    def test_default_and_multiselect_do_not_infer_starter_topic(self):
+        self.sign_in()
+        for choices in ([1245620], [4231820, 1245620, 292030]):
+            self.choose(choices)
+            source = self.client.get('/games').text
+            self.assertEqual(Elements(source).find('a', **{'class': 'button primary'})[0]['href'], '/start')
+            generic = self.client.get('/start').text
+            self.assertIn('Спроси, во что я играю', generic)
+            self.assertNotIn('Тема разговора:', generic)
+            self.assertNotIn('Хочу обсудить', generic)
+
+    def test_starter_topic_survives_step_navigation_repeat_and_back(self):
+        appid = 1245620
+        for step in ['connect', 'choose', 'play', 'choose', 'connect']:
+            result = self.client.get(ui.start_href(appid, step))
+            self.assertEqual(result.status_code, 200)
+            doc = Elements(result.text)
+            self.assertIn('Тема разговора: Elden Ring (AppID 1245620)', result.text)
+            for next_step in ['connect', 'choose', 'play']:
+                self.assertTrue(doc.find('a', href=ui.start_href(appid, next_step)))
+            back = doc.find('a', **{'class': 'back-link'})[0]['href']
+            self.assertEqual(back, {'connect': '/games?game=1245620', 'choose': ui.start_href(appid), 'play': ui.start_href(appid, 'choose')}[step])
+            self.assertFalse(doc.find('form'))
+            self.assertFalse(doc.find('input', type='hidden'))
+            self.assertFalse(doc.find('script', src='/assets/ai-export.js'))
+            self.assertEqual(result.headers['cache-control'], 'no-store')
+            self.assertEqual(result.headers['referrer-policy'], 'strict-origin')
+        play = self.client.get(ui.start_href(appid, 'play')).text
+        self.assertIn('Хочу обсудить Elden Ring (AppID 1245620).', play)
+        self.assertNotIn('Играю в …', play)
+        self.assertEqual(self.client.get('/start').status_code, 200)
+
+    def test_starter_identity_is_public_not_a_private_label_or_query_copy(self):
+        from unittest.mock import patch
+        from remote_server.app import COOKIE
+        self.sign_in()
+        owner = self.owner()
+        with self.app.state.store.db() as db:
+            db.execute('INSERT INTO game_registrations(owner,appid,label,created) VALUES(?,?,?,?)', (owner, 570, 'PRIVATE_LABEL_IGNORE_RULES', 1))
+        self.choose([570, 1245620])
+        source = self.client.get('/games?game=570').text
+        self.assertIn('PRIVATE_LABEL_IGNORE_RULES', source)
+        self.assertEqual(Elements(source).find('a', **{'class': 'button primary'})[0]['href'], '/start?game=570')
+        forbidden = ['PRIVATE_LABEL_IGNORE_RULES', 'PRIVATE_QUERY_TOKEN', 'PRIVATE_QUERY_TITLE', self.client.cookies[COOKIE], self.csrf(), self.owner()]
+        for appid, expected in [(570, 'Steam (AppID 570)'), (1086940, 'Baldur&#x27;s Gate 3 (AppID 1086940)')]:
+            with patch.object(self.app.state.store, 'session', side_effect=AssertionError('Starter must not read the session')), patch.object(self.app.state.store, 'catalog', side_effect=AssertionError('Starter must not read account labels')), patch.object(self.app.state.store, 'projection', side_effect=AssertionError('Starter must not read data')):
+                result = self.client.get(f'/start?game={appid}&title=PRIVATE_QUERY_TITLE&token=PRIVATE_QUERY_TOKEN')
+            self.assertEqual(result.status_code, 200)
+            self.assertIn(expected, result.text)
+            for value in forbidden:
+                self.assertNotIn(value, result.text)
+            for anchor in Elements(result.text).find('a'):
+                self.assertNotIn('token=', anchor.get('href', ''))
+                self.assertNotIn('title=', anchor.get('href', ''))
+
+    def test_starter_rejects_invalid_or_ambiguous_appids_without_reflection(self):
+        for value in ['', '0', '-1', '01', '1.0', '2147483648', '1%0A', 'true', '%3Cscript%3E']:
+            self.assertEqual(self.client.get('/start?game=' + value).status_code, 422)
+        self.assertEqual(self.client.get('/start?game=1245620&game=292030').status_code, 400)
+        self.assertEqual(self.client.get('/start?game=2147483647').status_code, 200)
+        for value in [None, True, False, '1245620', 0, -1, 2147483648, '<script>']:
+            self.assertIsNone(ui.starter_game(value))
+            self.assertEqual(ui.start_href(value), '/start')
+
+    def test_external_ai_spoiler_limit_visible_beside_transition(self):
+        for step in ['connect', 'play']:
+            source = ui.start_body('https://assist.example/mcp', step, 1245620)
+            note = 'но не гарантирует ответ внешнего AI без спойлеров'
+            self.assertEqual(source.count(note), 1)
+            self.assertGreater(source.index(note), source.index('Открыть Claude →'))
+            self.assertLess(source.index(note), source.index('<details'))

@@ -388,6 +388,8 @@ class ConsoleRedesignTests(unittest.TestCase):
         self.assertFalse(Elements(disabled).find('form'))
         off=ui.owned_library_panel('x',{'configured':True,'enabled':False})
         self.assertTrue(Elements(off).find('input',name='enabled',value='yes'))
+        self.assertTrue(Elements(off).find('input',name='action',value='enable_and_refresh'))
+        self.assertIn('Разрешить и загрузить игры',off)
         self.assertFalse(Elements(off).find('form',action='/account/library/refresh'))
         source=ui.owned_library_panel('x',{'configured':True,'enabled':True,'status':'ok','games':[{'appid':570,'name':'<unsafe>'},{'appid':4231820,'name':'Belmont'}]},[4231820])
         parsed=Elements(source)
@@ -397,6 +399,7 @@ class ConsoleRedesignTests(unittest.TestCase):
         self.assertFalse(parsed.find('input',name='scope'))
         self.assertFalse(parsed.find('input',type='checkbox'))
         self.assertTrue(parsed.find('input',name='enabled',value='no'))
+        self.assertFalse(parsed.find('input',name='action',value='enable_and_refresh'))
 
     def test_owned_library_unavailable_or_disabled_hides_stale_names(self):
         for configured,enabled,status in [(False,True,'ok'),(True,False,'ok'),(True,True,'unavailable'),(True,True,'expired')]:

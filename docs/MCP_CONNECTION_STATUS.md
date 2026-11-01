@@ -102,7 +102,8 @@ through the browser's Steam identity handoff (mocked), into optional consent:
    Refresh cannot add library, and ordinary rotation preserves progress-only scope.
 3. A new authorization for the same capable client explicitly checks library.
    The resulting dual-scope token still cannot read the source without independent
-   account opt-in. Opt-in alone does not fetch data; explicit website refresh does.
+   account opt-in. Permission-only opt-in does not fetch data; the explicit
+   “Разрешить и загрузить игры” action or manual website refresh does.
 4. Only cached AppID/name pairs become visible. The old progress-only family stays
    restricted; no game registration, selection or per-game grant is created.
    Progress and connection diagnostics still show no permitted game snapshots.
