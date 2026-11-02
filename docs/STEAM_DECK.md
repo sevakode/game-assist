@@ -59,8 +59,11 @@ Steam shortcut symlink.
 
 Setup validates the selection, preflights/installs user files, then displays a
 short-lived phone verification page and code. Open it on your phone, sign in
-through the official Steam flow, compare the code and approve the **same game
-and requested scope**: `saves.metadata` or `saves.summary`. Never paste Steam
+through the official Steam flow and enter the code from your own Deck. The next
+page shows the requested game and permissions; compare them with the Deck screen,
+then explicitly confirm or cancel. You do not have to choose scope checkboxes.
+Reviewing the request grants nothing; confirmation rechecks its expiry and exact
+permissions. Never confirm a code sent by another person. Never paste Steam
 passwords or device tokens into chat. Credentials are stored only in a private
 mode-0600 config within `~/.config/steam-game-companion` (directory mode 0700),
 never printed. No save observation is uploaded before explicit approval.

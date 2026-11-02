@@ -463,6 +463,29 @@ def home_body(projection, csrf, inbox=None, capabilities=None):
     return f'''{hero}{ai_export_panel(csrf, active, capabilities.get('ai_export_binding'))}{evidence_status(current, game, capabilities.get('owned_library'))}{shelf}<details class="library-settings" id="library"><summary>Выбор игр и библиотека Steam</summary>{owned_library_panel(csrf, capabilities.get("owned_library"), {g["appid"] for g in catalog}, [g["appid"] for g in catalog if g.get("selected")])}{library(status, active, catalog, csrf).replace('id="library"', 'id="game-library"')}</details><details class="utility-section" id="game-details"><summary>Игры, данные и настройки</summary><div class="account-strip signed-in"><div><strong>Steam подключён</strong><p>Разрешения можно изменить в настройках доступа.</p></div><a class="plain-link" href="#library">Выбрать игры и доступ</a></div><div class="console-layout"><div class="workspace">{selected_header(active, current["title"])}<section class="context-section" id="context"><div class="section-title"><h3>Сводка игры</h3><span class="status-text">{esc(status)}</span></div>{progress}{device_actions}{metadata_panel(game)}{cloud_notice()}</section><details class="utility-section"><summary>Возможности и каталог</summary>{capabilities_panel(active)}</details>{discovery_panel(capabilities.get("discovery_catalog"), {g["appid"] for g in catalog}, csrf)}<details class="utility-section"><summary>Разрешения и достижения</summary>{game_permissions(current, csrf)}{achievements_panel(current, game, csrf)}</details><section class="utility-section" id="updates"><div class="section-title"><h3>Обновления</h3><span class="status-text">{'Включены' if enabled else 'Выключены'}</span></div>{updates}{control}<p class="small-text">Только на сайте, не push. Новые уведомления появляются при изменениях разрешённой сводки.</p></section><section class="utility-section" id="assistant"><div class="section-title"><h3>Помощник</h3><span class="status-text">Через MCP</span></div><p>Здесь нет чата. ChatGPT или Claude могут читать разрешённые сводки, метаданные и сохранённые открытые достижения после отдельного OAuth-согласия.</p>{assistant_link()}</section><details class="utility-section account" id="account"><summary>Настройки доступа</summary><p>Доступ устройств и помощников можно отозвать. Сохранения на Deck останутся без изменений.</p><div class="account-actions"><form method="post" action="/logout">{hidden('csrf',csrf)}<button class="secondary">Выйти из аккаунта</button></form><details class="revoke-confirm"><summary>Отозвать весь доступ</summary><p>Это отключит устройства и помощников и удалит сводки с сервера.</p><form method="post" action="/account/revoke">{hidden('csrf',csrf)}<button class="danger">Отозвать весь доступ</button></form></details></div></details></div></div></details>'''
 
 
+def device_code_body(csrf):
+    return f'''<div class="form-page"><h1>Подключение Deck</h1>
+<p class="intro">Введи код с экрана своего Deck. На следующем шаге проверь игру и разрешения. Ввод кода сам по себе не даёт доступ.</p>
+<form class="form-stack" method="post" action="/devices/review">{hidden('csrf', csrf)}
+<label for="device-code">Код своего устройства</label><input id="device-code" name="user_code" minlength="8" maxlength="8" pattern="[A-Fa-f0-9]{{8}}" autocomplete="off" autocapitalize="characters" spellcheck="false" required>
+<button class="primary">Проверить запрос</button><a href="/">Отмена</a></form></div>'''
+
+
+def device_review_body(csrf, user_code, game, scopes):
+    descriptions = {
+        'saves.metadata': 'Метаданные выбранного сейва: только размер и время изменения, без содержимого, имени и пути.',
+        'saves.summary': 'Сводка Belmont’s Curse 1.1.3: текущие здоровье, мана и два счётчика фрагментов. Это не подтверждение максимальных значений или получения предметов.',
+    }
+    permissions = ''.join(f'<li>{esc(descriptions[scope])}</li>' for scope in scopes)
+    fields = ''.join(hidden(scope, 'yes') for scope in scopes)
+    return f'''<div class="form-page"><h1>Проверь запрос своего Deck</h1>
+<p class="intro">Подтверждай только свой Deck. Сравни игру и разрешения с его экраном. Не подтверждай код, присланный другим человеком.</p>
+<h2>{esc(game['name'])}</h2><p>Steam AppID: {esc(game['appid'])}</p><ul>{permissions}</ul>
+<p>Сохранения не изменяются. Содержимое сейва на сервер не отправляется. Доступ помощника подтверждается отдельно.</p>
+<form class="form-stack" method="post" action="/devices/approve">{hidden('csrf', csrf)}{hidden('user_code', user_code)}{hidden('appid', game['appid'])}{fields}
+<button class="primary">Разрешить перечисленное</button><a href="/">Отмена</a></form></div>'''
+
+
 def device_body(csrf, catalog=None, requested=None):
     games = game_catalog({'catalog':catalog or []})
     selected = [g for g in games if g.get('selected')] if catalog is not None else games[:1]

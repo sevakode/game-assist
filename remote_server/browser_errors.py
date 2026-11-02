@@ -7,7 +7,7 @@ from starlette.responses import PlainTextResponse
 from . import ui
 
 BROWSER_PATHS = frozenset({
-    '/', '/games', '/connect/claude', '/setup', '/import', '/login', '/steam/callback', '/devices/approve',
+    '/', '/games', '/connect/claude', '/setup', '/import', '/login', '/steam/callback', '/devices/approve', '/devices/review',
     '/oauth/consent', '/account/games', '/account/games/add',
     '/account/games/permissions', '/account/games/revoke',
     '/account/achievements/refresh', '/account/library/permission', '/account/library/refresh', '/account/notifications',
@@ -69,12 +69,14 @@ def error_page(request, status):
                   'Если переход из встроенного браузера не происходит, открой AI-клиент '
                   'в обычном браузере и начни новую попытку; не переноси старую ссылку возврата.')
         target, label = '/connect/claude', 'Инструкция подключения Claude'
-    elif path == '/devices/approve':
-        detail = 'Проверь код, игру и разрешения на экране своего Deck. Если код истёк, начни подключение заново на устройстве.'
+    elif path in ('/devices/approve', '/devices/review'):
+        detail = 'Подключение не подтверждено. Вернись к проверке запроса своего Deck. Если попытка истекла или уже использована, проверь состояние подключения на Deck перед новой попыткой.'
+        if status == 422:
+            detail = 'Игра или разрешения не прошли проверку. Подключение не подтверждено. Проверь, что игра добавлена в твой каталог, затем заново открой запрос устройства.'
         target, label = '/devices/approve', 'Ввести код заново'
     elif path == '/account/games/add':
         detail = 'Укажи положительный Steam AppID до 2147483647 и обычное название не длиннее 120 символов.'
-    if status != 401 and path not in ('/login', '/steam/callback', '/devices/approve'):
+    if status != 401 and path not in ('/login', '/steam/callback', '/devices/approve', '/devices/review'):
         target = getattr(request.state, 'browser_return', target)
     response = ui.page(title, f'<div class="form-page"><h1>{ui.esc(title)}</h1><p class="intro">{ui.esc(detail)}</p><p class="small-text">Код ответа: {status}</p><div class="action-row"><a class="button primary" href="{ui.esc(target)}">{ui.esc(label)}</a><a class="plain-link" href="/">На главную</a></div></div>')
     response.status_code = status

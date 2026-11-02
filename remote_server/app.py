@@ -694,6 +694,31 @@ def create_app(config=None, steam=None, database=None, download_dir=None, achiev
             db.execute('UPDATE pairings SET consumed=1 WHERE hash=?', (key,))
         return JSONResponse({'status':'approved','device_token':raw,'token_type':'Bearer','expires_in':2592000,'appid':row['appid'],'scopes':scopes})
 
+    async def review_device(request):
+        session = store.session(request, True)
+        data = await form(request, session, config.issuer)
+        store.limit('approve:'+session['owner'], 10)
+        if set(data) != {'csrf', 'user_code'}:
+            raise HTTPException(422, 'Only the device code is required')
+        user = str(data['user_code']).upper()
+        if not re.fullmatch('[A-F0-9]{8}', user):
+            raise HTTPException(400, 'Invalid device code')
+        with store.db() as db:
+            pending = db.execute('SELECT * FROM pairings WHERE user_hash=? AND expires>? AND owner IS NULL AND consumed=0',
+                                 (digest(user), time.time())).fetchone()
+            if not pending:
+                classify_request(reason='pairing_expired')
+                raise HTTPException(400, 'Invalid or expired device code')
+            game = next((g for g in store.catalog(session['owner'], db) if g['appid'] == pending['appid']), None)
+            if game is None:
+                raise HTTPException(422, 'Add this AppID to your games before pairing')
+            scopes = sorted(json.loads(pending['requested_scopes']))
+            if not scopes or any(scope not in SCOPES for scope in scopes) or ('saves.summary' in scopes and pending['appid'] != APPID):
+                raise HTTPException(422, 'Unsupported pairing request')
+            # Read-only review: final approval re-reads TTL, owner, catalog and exact scopes.
+            body = ui.device_review_body(session['csrf'], user, game, scopes)
+        return page('Проверь запрос своего Deck', body)
+
     async def approve_device(request):
         try:
             session=store.session(request,True)
@@ -701,7 +726,7 @@ def create_app(config=None, steam=None, database=None, download_dir=None, achiev
             if request.method=='GET':return RedirectResponse('/login?'+urlencode({'next':'/devices/approve'}),303)
             raise
         if request.method=='GET':
-            return page('Подключить устройство',ui.device_body(session['csrf'],catalog=store.catalog(session['owner'])))
+            return page('Подключить устройство',ui.device_code_body(session['csrf']))
         data=await form(request,session,config.issuer)
         store.limit('approve:'+session['owner'],10)
         if set(data)-{'csrf','user_code','appid',*SCOPES}:
@@ -1117,7 +1142,7 @@ def create_app(config=None, steam=None, database=None, download_dir=None, achiev
     app.routes.insert(0,Route('/.well-known/oauth-authorization-server',metadata))
     app.routes.extend([Route('/account/ai-export',export_ai_snapshot,methods=['POST']),Route('/assets/ai-export.js',ai_export_script,methods=['GET']),Route('/diagnostics',diagnostics_preview,methods=['GET']),Route('/assets/diagnostics.js',diagnostics_script,methods=['GET']),Route('/start',onboarding),Route('/assets/onboarding.js',onboarding_script),Route('/data-handling',data_handling,methods=['GET']),Route('/import',manual_import_page),Route('/assets/import.js',import_script),Route('/assets/belmont-parser.js',parser_script),Route('/v1/browser/observations',manual_import,methods=['POST']),Route('/assets/console.css',stylesheet),Route('/setup',setup_page),Route('/downloads/deck-companion.zip',download),Route('/downloads/deck-companion.zip.sha256',download_checksum),Route('/healthz',health),Route('/',home),Route('/games',games),Route('/connect/claude',connect_claude),Route('/login',login),Route('/steam/callback',callback),
         Route('/v1/devices/pair/start',pair_start,methods=['POST']),Route('/v1/devices/pair/poll',pair_poll,methods=['POST']),
-        Route('/devices/approve',approve_device,methods=['GET','POST']),Route('/v1/device/observations',ingest,methods=['POST']),
+        Route('/devices/review',review_device,methods=['POST']),Route('/devices/approve',approve_device,methods=['GET','POST']),Route('/v1/device/observations',ingest,methods=['POST']),
         Route('/oauth/consent',consent,methods=['GET','POST']),Route('/account/library/permission',library_permission,methods=['POST']),Route('/account/library/refresh',refresh_library,methods=['POST']),Route('/account/achievements/refresh',refresh_achievements,methods=['POST']),Route('/account/games/add',add_game,methods=['POST']),Route('/account/games',choose_games,methods=['POST']),Route('/account/games/permissions',game_permission,methods=['POST']),Route('/account/games/revoke',revoke_selected_game,methods=['POST']),Route('/account/notifications',notification_settings,methods=['POST']),Route('/account/notifications/read',notification_read,methods=['POST']),Route('/account/revoke',revoke,methods=['POST']),Route('/logout',logout,methods=['POST'])])
     app.routes.extend(discovery.public_routes(issuer=config.issuer))
     app.add_middleware(Boundary,config=config,store=store)

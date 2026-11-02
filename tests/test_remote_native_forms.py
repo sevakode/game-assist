@@ -99,8 +99,12 @@ class NativeFormTests(unittest.TestCase):
     def test_pair_approval_form_retains_guards_and_exact_game_scope(self):
         pair = self.client.post('/v1/devices/pair/start', json={
             'appid': 4231820, 'scopes': ['saves.summary']}).json()
-        fields = self.form('/devices/approve', '') | {
-            'user_code': pair['user_code'], 'appid': '4231820', 'saves.summary': 'yes'}
+        lookup = self.form('/devices/approve', '/devices/review') | {'user_code': pair['user_code']}
+        self.reject_invalid_submissions('/devices/review', lookup)
+        reviewed = self.submit('/devices/review', lookup)
+        self.assertEqual(reviewed.status_code, 200)
+        fields = next(f for f in FormReader(reviewed.text).forms
+                      if f['action'] == '/devices/approve')['fields']
         self.reject_invalid_submissions('/devices/approve', fields)
         with self.app.state.store.db() as db:
             self.assertIsNone(db.execute('SELECT owner FROM pairings').fetchone()[0])

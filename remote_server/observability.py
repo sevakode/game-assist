@@ -21,7 +21,7 @@ METHODS = frozenset(('GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS')
 ROUTE_CATEGORIES = {
     '/healthz': 'health', '/mcp': 'mcp',
     '/v1/devices/pair/start': 'pair_start', '/v1/devices/pair/poll': 'pair_poll',
-    '/devices/approve': 'pair_approval', '/v1/device/observations': 'device',
+    '/devices/review': 'pair_approval', '/devices/approve': 'pair_approval', '/v1/device/observations': 'device',
     '/authorize': 'oauth', '/token': 'oauth', '/register': 'oauth', '/revoke': 'oauth',
     '/oauth/consent': 'oauth', '/login': 'oauth', '/steam/callback': 'oauth',
     '/.well-known/oauth-authorization-server': 'oauth',

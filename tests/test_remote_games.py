@@ -127,7 +127,12 @@ class GameSelectionTests(unittest.TestCase):
             self.assertEqual(self.client.post('/v1/device/observations',json=body,headers={'authorization':'Bearer '+token}).status_code,422)
             pair=self.client.post('/v1/devices/pair/start',json={}).json()
             self.assertEqual(self.client.post('/devices/approve',data={'csrf':self.csrf(),'appid':str(appid),'saves.summary':'yes','user_code':pair['user_code']},headers={'origin':service_tests.ORIGIN}).status_code,422)
-        self.assertIn('name="saves.metadata"',self.client.get('/devices/approve').text)
+        self.assertIn('action="/devices/review"',self.client.get('/devices/approve').text)
+        metadata=self.client.post('/v1/devices/pair/start',json={'appid':1245620,'scopes':['saves.metadata']}).json()
+        review=self.client.post('/devices/review',data={'csrf':self.csrf(),'user_code':metadata['user_code']},headers={'origin':service_tests.ORIGIN})
+        self.assertEqual(review.status_code,200)
+        self.assertIn('name="saves.metadata"',review.text)
+        self.assertNotIn('name="saves.summary"',review.text)
 
     def test_legacy_belmont_only_migration_and_global_revoke(self):
         self.sign_in();owner=self.owner()
