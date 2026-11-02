@@ -357,35 +357,48 @@ class Runner:
                     raise RePairRequired()
             return self._tick_locked()
 
+    @contextmanager
+    def _observing(self):
+        # Only file inspection/decoding belongs here. Queue, transport and state
+        # persistence errors must not be reported as failures to parse a save.
+        try:
+            yield
+        except (watch.SnapshotError, OSError, ValueError, KeyError, TypeError):
+            self.state['observation_error'] = 'unavailable'
+            self.store.write('state.json', self.state)
+            raise
+
     def _tick_locked(self):
         if self.now() >= self.config.get('expires_at', float('inf')):
             self.state['sync_status'] = 'pairing_or_consent_required'
             self.store.write('state.json', self.state)
             raise RePairRequired()
         byte_limit = MAX_METADATA_BYTES if self.mode == 'metadata' else belmont.MAX_BYTES
-        current = signature(self.config['path'], byte_limit)
+        with self._observing():
+            current = signature(self.config['path'], byte_limit)
         if current != self.state.get('signature'):
             if current == self.candidate:
-                if self.mode == 'metadata':
-                    summary = clean_metadata({'size_bytes': current[3], 'modified_ns': current[4]})
-                    self.state['observation_status'] = 'metadata_only_contents_and_progress_unknown'
-                else:
-                    records = watch.snapshot([self.config['path']], single_file_only=True)
-                    try:
-                        summary = clean_summary(watch.belmont_summary(self.config['path'], records))
-                    except watch.SnapshotError:
-                        self.state['observation_status'] = 'unsupported_or_invalid_or_unstable_summary_format'
-                        self.store.write('state.json', self.state)
-                        raise
-                    self.state['observation_status'] = 'belmont_four_raw_fields_only'
-                if current != signature(self.config['path'], byte_limit):
-                    raise watch.SnapshotError('Save changed during observation')
+                with self._observing():
+                    if self.mode == 'metadata':
+                        summary = clean_metadata({'size_bytes': current[3], 'modified_ns': current[4]})
+                        self.state['observation_status'] = 'metadata_only_contents_and_progress_unknown'
+                    else:
+                        records = watch.snapshot([self.config['path']], single_file_only=True)
+                        try:
+                            summary = clean_summary(watch.belmont_summary(self.config['path'], records))
+                        except watch.SnapshotError:
+                            self.state['observation_status'] = 'unsupported_or_invalid_or_unstable_summary_format'
+                            raise
+                        self.state['observation_status'] = 'belmont_four_raw_fields_only'
+                    if current != signature(self.config['path'], byte_limit):
+                        raise watch.SnapshotError('Save changed during observation')
                 digest = hashlib.sha256(json.dumps(summary, sort_keys=True).encode()).hexdigest()
                 if digest != self.state.get('summary_digest'):
                     self.state['queue'] = {'event_id': str(uuid.uuid4()), 'appid': self.appid,
                                            'kind': self.kind, 'payload': summary}
                     self.state['summary_digest'] = digest
                 self.state['signature'] = current
+                self.state.pop('observation_error', None)
                 self.state['observed_at'] = self.now()
                 self.store.write('state.json', self.state)
             self.candidate = current
@@ -419,6 +432,68 @@ class Runner:
             self.state['sync_status'] = 'synced'
             self.failures = 0
             self.store.write('state.json', self.state)
+
+
+def status_report(store, now=None):
+    """Sanitized local evidence only; no save contents, network or service actions."""
+    now = time.time() if now is None else now
+    result = {'paired': False, 'pairing': 'unpaired', 'watcher': 'unknown',
+              'observed_at': None, 'synced_at': None, 'appid': None, 'mode': None,
+              'observation_status': 'not_observed',
+              'sync_status': 'not_synced', 'last_local_observation_at': None,
+              'last_server_ack_local_at': None, 'source_observation_time': 'unknown',
+              'server_received_time': 'unknown', 'parse': 'unknown',
+              'pending_unsent_snapshot': False, 'queued': False, 'snapshot': 'none', 'selected_file': 'not_checked'}
+    config = store.read('config.json') if store is not None else {}
+    if not config:
+        return result
+    appid, mode = config.get('appid', 4231820), config.get('mode', 'belmont-summary')
+    selection(appid, mode)
+    server_origin(config['server'])
+    token, expiry = config['device_token'], config['expires_at']
+    if not isinstance(token, str) or not token or len(token) > 4096 or any(c.isspace() for c in token):
+        raise ValueError('Invalid private configuration')
+    if type(expiry) not in (int, float) or not 0 < expiry < float('inf'):
+        raise ValueError('Invalid private configuration')
+    result.update(paired=True, appid=appid, mode=mode, pairing='expired' if now >= expiry else 'paired_remote_unchecked')
+    state = store.read('state.json')
+    if (store.read('config.json') != config
+            or state.get('pairing_id') != config.get('pairing_id')
+            or state.get('appid', 4231820) != appid
+            or state.get('mode', 'belmont-summary') != mode):
+        result['snapshot'] = 'old_pairing_ignored'
+        return result
+    def timestamp(value):
+        return value if type(value) in (int, float) and 0 < value <= now else None
+    result['last_local_observation_at'] = timestamp(state.get('observed_at'))
+    result['last_server_ack_local_at'] = timestamp(state.get('synced_at'))
+    result['observed_at'] = result['last_local_observation_at']
+    result['synced_at'] = result['last_server_ack_local_at']
+    if state.get('sync_status') in ('synced', 'offline_or_rejected', 'pairing_or_consent_required'):
+        result['sync_status'] = state['sync_status']
+    if result['sync_status'] == 'pairing_or_consent_required':
+        result['pairing'] = 'reauthorization_required'
+    result['pending_unsent_snapshot'] = bool(state.get('queue'))
+    result['queued'] = result['pending_unsent_snapshot']
+    observed = state.get('observation_status')
+    result['parse'] = {'belmont_four_raw_fields_only': 'supported_four_raw_fields',
+                       'metadata_only_contents_and_progress_unknown': 'not_attempted_metadata_only',
+                       'unsupported_or_invalid_or_unstable_summary_format': 'unsupported_or_error'}.get(observed, 'unknown')
+    if result['parse'] != 'unknown':
+        result['observation_status'] = observed
+    if state.get('observation_error') == 'unavailable':
+        result['parse'] = 'error' if observed != 'unsupported_or_invalid_or_unstable_summary_format' else 'unsupported_or_error'
+    try:
+        current = signature(config['path'], MAX_METADATA_BYTES if mode == 'metadata' else belmont.MAX_BYTES)
+        result['selected_file'] = 'available_metadata_only_check'
+        result['snapshot'] = ('matches_file_metadata' if current == state.get('signature')
+                              else 'stale_or_not_observed')
+    except (OSError, ValueError, KeyError, TypeError, watch.SnapshotError):
+        result['selected_file'] = 'missing_unsafe_or_unreadable'
+        result['snapshot'] = 'stale_or_not_observed'
+    if result['snapshot'] != 'matches_file_metadata' and result['parse'] == 'supported_four_raw_fields':
+        result['parse'] = 'previous_supported_current_unknown'
+    return result
 
 
 def main(argv=None):
@@ -456,6 +531,16 @@ def main(argv=None):
         return setup(args.server, args.path, enable=args.enable, appid=args.appid, mode=args.mode)
     if args.enable:
         parser.error('--enable applies only to setup')
+    if args.command == 'status':
+        try:
+            result = status_report(Store(create=False))
+        except FileNotFoundError:
+            result = status_report(None)
+        except (OSError, ValueError, KeyError, TypeError, watch.SnapshotError):
+            result = status_report(None)
+            result.update(pairing='invalid_or_unreadable', sync_status='unknown')
+        print(json.dumps(result))
+        return 0
     try:
         store = Store()
         if args.command == 'pair':
@@ -464,18 +549,6 @@ def main(argv=None):
             pair(store, Transport(args.server, args.allow_local_test), args.path, appid=args.appid, mode=args.mode or 'metadata')
             return 0
         config = store.read('config.json')
-        if args.command == 'status':
-            state = store.read('state.json')
-            if (state.get('pairing_id') != config.get('pairing_id')
-                    or state.get('appid', 4231820) != config.get('appid', 4231820)
-                    or state.get('mode', 'belmont-summary') != config.get('mode', 'belmont-summary')):
-                state = {}
-            print(json.dumps({'paired': bool(config), 'sync_status': state.get('sync_status', 'not_synced'),
-                              'observed_at': state.get('observed_at'), 'synced_at': state.get('synced_at'),
-                              'queued': bool(state.get('queue')), 'appid': config.get('appid', 4231820) if config else None,
-                              'mode': config.get('mode', 'belmont-summary') if config else None,
-                              'observation_status': state.get('observation_status', 'not_observed')}))
-            return 0
         if args.server or args.path or args.appid is not None or args.mode is not None:
             parser.error('run uses the paired server/path; pair again to change them')
         if not config:

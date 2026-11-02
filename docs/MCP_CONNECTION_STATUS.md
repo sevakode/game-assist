@@ -1,7 +1,8 @@
 # Agent connection diagnostics (contract version 1)
 
 `get_connection_status()` is an additional read-only MCP tool. Existing
-`get_progress` and `suggest_next_step` responses are unchanged. All three require
+`suggest_next_step` response is unchanged; `get_progress` has the additive fields
+documented below. All three require
 the existing `progress.read` bearer and bind to its subject; the new tool has no
 arguments. It returns availability and user actions, not a second progress payload.
 
@@ -137,3 +138,47 @@ These fields are additive: connection status remains version 1; get_progress
 retains its existing unversioned envelope. Consumers should ignore unknown fields
 and must not use checked_at as data freshness. Existing fields are not renamed or
 removed, and no new scopes, grants, network requests or DTO input IDs are added.
+
+## Save-backed personalization readiness (additive)
+
+Both `get_progress` and `get_connection_status` now return `guidance_policy`:
+`personalized_walkthrough_requires_save: true`, `ordinary_conversation_allowed:
+true`, `conversation_is_not_synced_progress: true`. Authorization, library and
+achievement availability alone do not establish save ingestion. Ordinary discussion
+can continue, clearly identified as user-provided context rather than synced progress.
+
+Each already-visible game has the same `save_readiness` object in both tools:
+
+| Field/state | Meaning |
+|---|---|
+| `state: no_visible_save_summary` | No permitted supported summary; missing consent and missing ingestion are not distinguishable. Metadata alone is insufficient. |
+| `state: unsupported_parser` | This game's summary parser is unsupported, regardless of metadata availability. |
+| `state: summary_fields_unknown` | A permitted summary exists but none of its four scalar fields is known. |
+| `state: limited_summary_available` | At least one reported scalar is known; `known_scalar_count` distinguishes partial from four-field availability. |
+| `coverage` | `four_raw_scalars_only` for a visible supported summary; otherwise `none`. |
+| `snapshot_basis` | `reported_snapshot` or `none`; snapshots are historical reports, not continuous synchronization. |
+| `source` | Permitted summary provenance: `browser_manual`, `device`, or `unknown`. |
+| `game_observed_at: null`, `game_freshness: unknown` | The source does not establish actual gameplay observation time. Neither receipt nor checked_at substitutes for it. |
+| `independently_verified: false` | Reported fields are not independently verified game state. |
+| `synchronized_walkthrough_ready: false` | No current supported summary establishes synchronized position/progression. |
+| `item_specific_guidance_ready: false`, `inventory_boss_map_coverage: none` | No verified inventory, boss or map facts exist in this summary. Do not infer them from health/mana values, achievements or the game's title. |
+
+A four-field Belmont summary permits discussing those reported raw values, with
+these limits; it is not a complete personalized walkthrough or 100% parser coverage.
+All unknown values stay unknown. A historical snapshot with an old receipt remains
+available as a report, while actual game freshness remains unknown. The existing
+24-hour **receipt review suggestion** is unchanged, not a readiness cutoff. No new
+expiry or configurable freshness threshold is introduced.
+
+For later UI: show the state and limited coverage beside the existing source and
+receipt fields; explicitly label receipt as server receipt. Never label any current
+state “fresh”, “synced”, or “ready for item guidance”. With no visible games, show
+selection/permission uncertainty without discovering additional games. Revoked
+summary permission hides readiness evidence even if metadata remains permitted.
+This is an additive version-1 diagnostic extension and unversioned progress
+extension; existing fields and tool inputs are unchanged. No UI is changed here.
+
+Verification: `python -m unittest discover -s tests -p test_save_readiness.py -v`
+uses synthetic local SQLite/MCP to cover absent/partial-or-complete availability,
+unknown fields, unsupported parser, historical/unknown receipt, revoked summary,
+remaining metadata permission, cross-tenant isolation and no Steam source calls.

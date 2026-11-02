@@ -108,7 +108,10 @@ class MCPToolMetadataTests(unittest.TestCase):
         self.assertEqual(self.rpc(None, 'tools/list').status_code, 401)
         result = self.called(progress, 'get_progress')
         self.assertIsInstance(result.pop('checked_at'), (int, float))
-        self.assertEqual(result, {'spoiler_policy':'strict', 'games':[]})
+        self.assertEqual(result, {'spoiler_policy':'strict', 'games':[],
+            'guidance_policy': {'personalized_walkthrough_requires_save': True,
+                'ordinary_conversation_allowed': True,
+                'conversation_is_not_synced_progress': True}})
         suggestion = self.called(progress, 'suggest_next_step')
         self.assertEqual(suggestion, {
             'progress':{'spoiler_policy':'strict', 'games':[]},

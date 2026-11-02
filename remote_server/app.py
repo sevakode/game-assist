@@ -40,7 +40,7 @@ from .oauth import OAuthProvider, OAUTH_SCOPES
 from .observability import ObservabilityMiddleware, classify_request, configure_safe_stdout
 from diagnostics.preview import preview_page, preview_script
 from .auth_response import identify_authorization_errors
-from .connection_status import connection_status
+from .connection_status import connection_status, save_readiness, guidance_policy
 from .mcp_library import library_result
 from .database import Database
 from .achievements import AchievementReader
@@ -459,7 +459,10 @@ def create_app(config=None, steam=None, database=None, download_dir=None, achiev
         token = get_access_token()
         if not token or not token.subject:
             raise ValueError('Authentication required')
-        return {**store.projection(token.subject), 'checked_at': time.time()}
+        projection = store.projection(token.subject)
+        for game in projection['games']:
+            game['save_readiness'] = save_readiness(game)
+        return {**projection, 'checked_at': time.time(), 'guidance_policy': guidance_policy()}
 
     @mcp.tool(title='Clarify the next step', annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=False))
     def suggest_next_step() -> dict:

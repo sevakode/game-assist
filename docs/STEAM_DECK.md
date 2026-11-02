@@ -632,3 +632,27 @@ This does not change host permissions, create host runtime directories, contact
 a running service manager, or skip a check. The actual generated unit and all
 positive/negative parser cases remain intact; only the verifier's scope and
 private runtime location change.
+
+### One local status result
+
+From the existing companion source directory run `python3 -m deck status`.
+This is a read-only local check: no network, save-content reads, service changes,
+re-pairing or diagnostic uploads. It returns one sanitized JSON object.
+`paired_remote_unchecked` means a locally stored, unexpired credential, not proof
+of current server consent. `watcher: unknown` is intentional: persisted state
+cannot establish that a process is running now.
+
+`last_local_observation_at` is the Deck clock time of the last successful local
+observation, not the game's save time. `last_server_ack_local_at` is the Deck
+clock time when the server acknowledged an event, not the server's received time;
+both source observation time and server received time remain unknown here.
+`pending_unsent_snapshot` identifies a retained event awaiting acknowledgement.
+An old acknowledgement does not mean the current save was sent. `snapshot` compares
+only safe file metadata; even a match is not a fresh content validation.
+
+`parse` distinguishes metadata-only (no parser), supported four raw fields,
+previous support with a changed file, and errors. `unsupported_or_error` is
+intentionally combined where the existing decoder cannot distinguish unsupported,
+invalid or unstable input. Missing files and parse failures retain the last
+acknowledgement as historical evidence. Old pairing generations are ignored.
+No status result proves real Deck service/Game Mode/suspend/reboot acceptance.

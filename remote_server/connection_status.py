@@ -10,6 +10,41 @@ from .games import public_game_identity
 RECEIPT_REVIEW_AFTER_SECONDS = 86400
 
 
+def save_readiness(game):
+    """Describe only an already-permitted projection; receipt is not game time."""
+    summary = game.get('summary') if game.get('summary_supported') else None
+    known = sum(field.get('status') == 'known'
+                for field in summary['player_scalars'].values()) if summary else 0
+    if not game.get('summary_supported'):
+        state = 'unsupported_parser'
+    elif summary is None:
+        state = 'no_visible_save_summary'
+    elif known:
+        state = 'limited_summary_available'
+    else:
+        state = 'summary_fields_unknown'
+    source = game.get('summary_source') if summary else None
+    return {
+        'state': state,
+        'coverage': 'four_raw_scalars_only' if summary else 'none',
+        'known_scalar_count': known,
+        'snapshot_basis': 'reported_snapshot' if summary else 'none',
+        'source': source if source in ('browser_manual', 'device') else 'unknown',
+        'game_observed_at': None,
+        'game_freshness': 'unknown',
+        'independently_verified': False,
+        'synchronized_walkthrough_ready': False,
+        'item_specific_guidance_ready': False,
+        'inventory_boss_map_coverage': 'none',
+    }
+
+
+def guidance_policy():
+    return {'personalized_walkthrough_requires_save': True,
+            'ordinary_conversation_allowed': True,
+            'conversation_is_not_synced_progress': True}
+
+
 def receipt(received_at, now):
     if (type(received_at) not in (int, float) or not math.isfinite(received_at)
             or received_at < 0 or received_at > now):
@@ -64,6 +99,7 @@ def phone_context(projection, origin, *, achievements_available, now):
 def connection_status(projection, origin, *, achievements_available, now):
     result = {
         'version': 1, 'connection': 'authenticated', 'checked_at': now,
+        'guidance_policy': guidance_policy(),
         'reasons': [], 'actions': [], 'games': [],
         'links': {name: origin + path for name, path in (
             ('games', '/games'), ('import', '/import'), ('setup', '/setup'),
@@ -86,7 +122,8 @@ def connection_status(projection, origin, *, achievements_available, now):
         result['reasons'].append('no_authorized_games_visible')
         result['actions'].append('review_game_selection_and_permissions')
     for game in projection['games']:
-        item = {'appid': game['appid'], **public_game_identity(game['appid']), 'reasons': [], 'actions': [], 'snapshots': {}}
+        item = {'appid': game['appid'], **public_game_identity(game['appid']), 'reasons': [], 'actions': [], 'snapshots': {},
+                'save_readiness': save_readiness(game)}
         if not game['summary_supported']:
             item['reasons'].append('summary_decoder_unavailable')
         for kind in ('summary', 'metadata'):
