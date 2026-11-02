@@ -11,6 +11,7 @@ from pathlib import Path
 import tempfile
 from types import SimpleNamespace
 import unittest
+from consent_fixtures import legacy_consent
 from urllib.parse import parse_qs, urlsplit
 
 from starlette.testclient import TestClient
@@ -83,6 +84,7 @@ class MCPConsentAcceptance(unittest.TestCase):
         self.assertEqual(response.status_code,302,response.text)
         return response.headers['location']
 
+    @legacy_consent
     def consent(self, location, client_id, state, *, allow_library):
         page = self.http.get(location)
         self.assertEqual(page.status_code,200,page.text)

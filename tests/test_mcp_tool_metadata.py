@@ -6,6 +6,7 @@ from pathlib import Path
 import tempfile
 from types import SimpleNamespace
 import unittest
+from consent_fixtures import legacy_consent
 from urllib.parse import parse_qs, urlsplit
 
 from starlette.testclient import TestClient
@@ -39,6 +40,7 @@ class MCPToolMetadataTests(unittest.TestCase):
         self.addCleanup(self.client.__exit__, None, None, None)
         self.sign_in()
 
+    @legacy_consent
     def credentials(self, scope='progress.read'):
         registered = self.client.post('/register', json={
             'redirect_uris':[service.REDIRECT], 'token_endpoint_auth_method':'none',

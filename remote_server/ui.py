@@ -497,15 +497,61 @@ def device_body(csrf, catalog=None, requested=None):
     return f'<div class="form-page"><a class="back-link" href="/">К играм</a><h1>Подключение Deck</h1><p class="intro">Введи код, показанный на твоём Steam Deck. Не подтверждай код, присланный другим человеком.</p>{request_note}{empty_note}<form class="form-stack" method="post">{hidden("csrf",csrf)}<label for="device-code">Код устройства</label><input id="device-code" class="code-input" name="user_code" minlength="8" maxlength="8" pattern="[A-Fa-f0-9]{{8}}" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="A1B2C3D4" required><label for="game-select">Игра</label><select id="game-select" name="appid" required><option value="">Выбери игру с экрана Deck</option>{options}</select><fieldset><legend>Что разрешено передавать</legend><label class="check"><input type="checkbox" name="saves.metadata" value="yes"><span>Метаданные выбранного сейва<small>Только размер файла и время изменения. Без имени, пути, хеша и содержимого.</small></span></label>{summary_option}</fieldset><p class="small-text">Выбери разрешения, совпадающие с запросом на Deck. Доступ помощника подтверждается отдельно. Компаньон не изменяет файл; содержимое сейва на сервер не отправляется.</p><div class="action-row"><button class="primary" {"disabled" if not selected else ""}>Подключить устройство</button><a class="plain-link" href="/">Отмена</a></div></form></div>'
 
 
-def consent_body(csrf, req, client_label, scopes=('progress.read',)):
-    descriptions = {
-        'progress.read': 'Только разрешённые тобой сводки, метаданные и сохранённые открытые достижения.',
-        'library.read': 'Список игр из библиотеки Steam: AppID и названия. Только пока отдельно включено чтение библиотеки на сайте. Без времени игры и иконок. Это не выбирает игры и не разрешает чтение их сейвов или достижений.',
-    }
-    permissions = ''.join(f'<li><strong>{esc(scope)}</strong>: {descriptions[scope]}</li>' for scope in scopes if scope != 'library.read')
+def consent_plan_body(csrf, req, client_label, plan):
+    """Display a backend-validated immutable plan; never post editable grant lists."""
+    labels = {'metadata': 'размер и время файла', 'summary': 'сводка сохранения', 'achievements': 'открытые достижения'}
+    if (not isinstance(plan['plan_id'], str) or not plan['plan_id']
+            or type(plan['zero_games']) is not bool or type(plan['library_source_change']) is not bool
+            or plan['zero_games'] != (not plan['games'])
+            or 'progress.read' not in plan['oauth_scopes']
+            or set(plan['oauth_scopes']) - {'progress.read', 'library.read'}):
+        raise ValueError('Invalid consent review plan')
+    rows = []
+    for game in plan['games']:
+        appid = game['appid']
+        if (type(appid) is not int or not 1 <= appid <= 2147483647
+                or not game['categories'] or set(game['categories']) - labels.keys()):
+            raise ValueError('Invalid consent game categories')
+        title = DISCOVERY_TITLES.get(appid) or game.get('trusted_name_or_null') or f'Steam AppID {appid}'
+        categories = ', '.join(labels[key] for key in labels if key in game['categories'])
+        rows.append(f'<li><strong>{esc(title)}</strong><span>{esc(categories)}</span></li>')
+    games = ('<ul class="consent-games">' + ''.join(rows) + '</ul>' if rows else
+             '<p class="small-text">Игры не выбраны: доступ к их данным не добавится. Можно подключить помощника и начать разговор.</p>')
+    library = ''
+    if plan['library_source_change']:
+        library = '<p>После подтверждения Game Assist получит разрешение читать библиотеку Steam.</p>'
+    if 'library.read' in plan['oauth_scopes']:
+        library += '<p>Помощнику будет разрешено читать библиотеку: названия игр и AppID, когда источник библиотеки включён.</p>'
+    details = ' · '.join(esc(scope) for scope in plan['oauth_scopes'])
+    return f'''<div class="form-page chat-consent"><span class="entry-eyebrow">Game Assist</span><h1>Разрешить игровой доступ?</h1><p class="intro">Получатель: <strong class="consent-recipient">{esc(client_label)}</strong>.</p><p>После подтверждения будет разрешено чтение перечисленных данных. Они покинут Game Assist и будут доступны этому и другим уже подключённым помощникам в пределах их разрешений.</p><p>Файлы сейвов и Steam Cloud не подключаются.</p>{games}{library}<form method="post" action="/oauth/consent">{hidden('csrf',csrf)}{hidden('request',req)}{hidden('plan_id',plan['plan_id'])}{hidden('approve','yes')}<div class="action-row"><button class="primary">Разрешить перечисленное и вернуться в чат</button><a class="plain-link" href="/">Не подключать</a></div><details class="consent-details"><summary>Подробности доступа и возврата</summary><p>Права помощника: {details}. Перечисленный набор фиксирован; новые игры не добавляются автоматически.</p><p>Разрешение не означает, что данные уже загружены. Сводка не является полным сейвом или текущим экраном. Для Belmont это только здоровье, мана и два счётчика фрагментов. Метаданные — размер и время файла; без имени, пути и содержимого. Достижения — только открытые, без вывода о текущем инвентаре.</p><p>Покупки, обмены, изменение аккаунта и запись сохранений не разрешаются.</p><p>Если возврат в AI-клиент не произошёл, проверь подключение там и начни новую попытку из клиента. Повторное нажатие здесь не завершит подключение.</p><a class="plain-link" href="/data-handling">Обработка данных</a></details></form><p class="small-text"><a href="/games#account">Настройки и отзыв доступа</a></p></div>'''
+
+
+def consent_body(csrf, req, client_label, scopes=('progress.read',), *, access_context=None, review_plan=None):
+    """Legacy current access, or an explicit server-bound plan awaiting approval."""
+    if review_plan is not None:
+        return consent_plan_body(csrf, req, client_label, review_plan)
+    labels = {'summary': 'сводка сохранения', 'metadata': 'размер и время файла', 'achievements': 'открытые достижения'}
+    rows = []
+    if access_context is not None:
+        for game in access_context.get('games', []):
+            appid = game.get('appid')
+            if type(appid) is not int or not 1 <= appid <= 2147483647:
+                continue
+            categories = [labels[key] for key in labels if key in game.get('read_categories', [])]
+            if categories:
+                title = DISCOVERY_TITLES.get(appid, f'Steam AppID {appid}')
+                rows.append(f'<li><strong>{esc(title)}</strong><span>{esc(", ".join(categories))}</span></li>')
+    context = ('<ul class="consent-games">' + ''.join(rows) + '</ul>' if rows else
+               '<p class="small-text">Игровые данные ещё не разрешены. Можно подключиться и начать разговор без них.</p>' if access_context is not None else
+               '<p class="small-text">Только уже разрешённые тобой игровые данные. Подключение не выбирает игры и не добавляет доступ к ним.</p>')
+    optional = ''
+    library_details = ''
     if 'library.read' in scopes:
-        permissions += f'<li><label><input type="checkbox" name="library_read" value="yes"> Дополнительно разрешить library.read — библиотеку игр</label><p>{descriptions["library.read"]}</p><p>Необязательно: без отметки помощник получит только progress.read.</p></li>'
-    return f'''<div class="form-page"><a class="back-link" href="/">К играм</a><h1>Доступ помощника</h1><p class="intro">Разрешить этому клиенту читать перечисленные данные?</p><div class="client-label"><strong>Клиент и адрес возврата</strong><p>{esc(client_label)}</p></div><form method="post" action="/oauth/consent">{hidden('csrf',csrf)}{hidden('request',req)}<ul class="permission-list">{permissions}<li>Без сырых сохранений и Steam ID.</li><li>Переданные факты покинут Game Assist.</li></ul><p class="small-text">Доступ можно отозвать в настройках на главной.</p><p class="small-text">После нажатия браузер должен вернуться в AI-клиент. Если переход не произошёл, проверь подключение там и начни новую попытку из клиента. Повторное нажатие здесь не завершит подключение.</p><div class="action-row"><button class="primary">Разрешить чтение данных</button><a class="plain-link" href="/">Не подключать</a></div></form></div>'''
+        optional = '<label class="consent-library"><input type="checkbox" name="library_read" value="yes"><span>Также разрешить помощнику читать библиотеку Steam</span></label>'
+        if access_context is not None and not access_context.get('library_source_enabled'):
+            optional += '<p class="small-text">Источник библиотеки пока выключен: эта отметка сама по себе его не подключает.</p>'
+        library_details = '<p>library.read — AppID и названия. Только пока отдельно включено чтение библиотеки на сайте. Без времени игры и иконок. Это не выбирает игры и не разрешает чтение их сейвов или достижений.</p>'
+    return f'''<div class="form-page chat-consent"><span class="entry-eyebrow">Game Assist</span><h1>Подключить помощника?</h1><p class="intro">Получатель: <strong class="consent-recipient">{esc(client_label)}</strong>.</p><p>Перечисленные данные покинут Game Assist и станут доступны этому AI-клиенту — только для чтения.</p><p>Файлы сейвов и Steam Cloud не подключаются.</p>{context}<form method="post" action="/oauth/consent">{hidden('csrf',csrf)}{hidden('request',req)}{optional}<div class="action-row"><button class="primary">Разрешить и вернуться в чат</button><a class="plain-link" href="/">Не подключать</a></div><details class="consent-details"><summary>Подробности доступа и возврата</summary><p>progress.read — только разрешённые сводки, метаданные и сохранённые открытые достижения. Без сырых сохранений и Steam ID.</p>{library_details}<p>Сводка не означает текущий экран или полный прогресс. Для Belmont доступны только текущие здоровье, мана и два счётчика фрагментов; для других игр разбор сейва не обещается.</p><p>После нажатия браузер должен вернуться в AI-клиент. Если переход не произошёл, проверь подключение там и начни новую попытку из клиента. Повторное нажатие здесь не завершит подключение.</p><a class="plain-link" href="/data-handling">Обработка данных</a></details></form><p class="small-text"><a href="/games#account">Настройки и отзыв доступа</a></p></div>'''
 
 
 def approved_body():

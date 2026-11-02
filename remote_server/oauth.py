@@ -4,6 +4,7 @@ The SDK owns OAuth protocol parsing, client authentication and PKCE validation.
 This module owns short-lived opaque credentials and atomic replay prevention.
 Single-instance SQLite prototype; no claim of production AS certification.
 """
+from contextlib import nullcontext
 import hashlib
 import json
 import re
@@ -104,14 +105,16 @@ class OAuthProvider:
             row = db.execute('SELECT data FROM oauth_pending WHERE id=? AND expires>?', (digest(request_id), self.clock())).fetchone()
         return json.loads(row['data']) if row else None
 
-    def approve(self, request_id, subject, *, granted_scopes=('progress.read',)):
+    def approve(self, request_id, subject, *, granted_scopes=('progress.read',), connection=None):
         if not subject or len(subject) > 128:
             raise ValueError('Invalid subject')
-        with self.db() as db:
+        with (nullcontext(connection) if connection is not None else self.db()) as db:
             row = db.execute('DELETE FROM oauth_pending WHERE id=? AND expires>? RETURNING data', (digest(request_id), self.clock())).fetchone()
             if not row:
                 raise ValueError('Expired or consumed authorization request')
             data = json.loads(row['data'])
+            data.pop('_review_plan', None)
+            data.pop('_review_owner', None)
             granted = list(granted_scopes)
             if ('progress.read' not in granted or len(granted) != len(set(granted))
                 or set(granted) - set(data['scopes'])):

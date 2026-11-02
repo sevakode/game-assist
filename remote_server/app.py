@@ -5,6 +5,7 @@ The local server remains a separate application. No credentials are provisioned
 at import time and no Steam requests occur without an explicit browser login.
 """
 import hashlib
+import inspect
 import html
 import json
 import os
@@ -47,6 +48,7 @@ from .library_reader import LibraryReader
 from . import ui, discovery
 from .ai_export import ManualAIExport
 from .data_handling import data_handling_page
+from .consent_plan import invalidate_plans, prepare_plan, approve_plan
 from .browser_errors import http_exception as browser_http_exception, wants_browser_error, error_page
 from .games import CURRENT_GAME_IDS, CATALOG_REVISION, GAMES, DISCOVERY_TITLES, discovery_catalog, public_game_identity
 
@@ -170,6 +172,7 @@ class Store:
 
     @staticmethod
     def revoke_scope(db,owner,appid,scope):
+        invalidate_plans(db,owner)
         db.execute('DELETE FROM grants WHERE owner=? AND appid=? AND scope=?',(owner,appid,scope))
         if scope=='achievements.read':
             db.execute('DELETE FROM achievement_cache WHERE owner=? AND appid=?',(owner,appid))
@@ -747,6 +750,7 @@ def create_app(config=None, steam=None, database=None, download_dir=None, achiev
                 raise HTTPException(400,'Invalid or expired device code')
             if appid!=pending['appid'] or scopes!=sorted(json.loads(pending['requested_scopes'])) or ('saves.summary' in scopes and appid!=APPID):
                 raise HTTPException(422,'Game and scopes must exactly match the request shown on your device')
+            invalidate_plans(db,session['owner'])
             db.execute('UPDATE pairings SET owner=?,scopes=? WHERE hash=?',(session['owner'],json.dumps(scopes),pending['hash']))
             db.execute('INSERT INTO game_selections(owner,appid,selected_at) VALUES(?,?,?) ON CONFLICT(owner,appid) DO NOTHING',(session['owner'],appid,time.time()))
             for scope in scopes:db.execute('INSERT OR IGNORE INTO grants VALUES(?,?,?)',(session['owner'],appid,scope))
@@ -860,8 +864,25 @@ def create_app(config=None, steam=None, database=None, download_dir=None, achiev
             if re.fullmatch(r'https://[A-Za-z0-9.-]+(?::[0-9]+)?/[A-Za-z0-9/_~.-]*', callback_uri):
                 request.state.consent_callback_source = callback_uri
             client_label = (client.client_name or 'Unnamed client') + ' — ' + callback_uri
-            return page('Подключить помощника', ui.consent_body(session['csrf'],req,client_label,pending['scopes']))
+            # Renderer is independently delivered. Legacy renderers never create
+            # a grant-expanding plan or accidentally opt users into the new flow.
+            kwargs = {}
+            if 'review_plan' in inspect.signature(ui.consent_body).parameters:
+                kwargs['review_plan'] = prepare_plan(store,provider,session,req)
+            return page('Подключить помощника', ui.consent_body(session['csrf'],req,client_label,pending['scopes'],**kwargs))
         data = await form(request,session,config.issuer)
+        if 'plan_id' in data or 'approve' in data:
+            if set(data) != {'csrf','request','plan_id','approve'} or data.get('approve') != 'yes':
+                raise HTTPException(422,'Explicit reviewed plan confirmation required')
+            store.limit('consent-approve:'+digest(session['owner']),10)
+            try:
+                target = approve_plan(store,provider,session,str(data['request']),str(data['plan_id']),
+                    achievement_rows_global=ACHIEVEMENT_ROWS_GLOBAL,
+                    achievement_rows_per_owner=ACHIEVEMENT_ROWS_PER_OWNER,
+                    library_rows_global=LIBRARY_ROWS_GLOBAL)
+            except (ValueError,LookupError):
+                raise HTTPException(400,'Expired authorization request') from None
+            return RedirectResponse(target,303)
         if set(data)-{'csrf','request','library_read'} or data.get('library_read') not in (None,'yes'):
             raise HTTPException(422, 'Explicit optional library consent required')
         granted_scopes = ['progress.read']
@@ -915,6 +936,7 @@ def create_app(config=None, steam=None, database=None, download_dir=None, achiev
         with store.db() as db:
             if data.get('catalog_revision')!=store.catalog_revision(session['owner'],store.catalog(session['owner'],db)):
                 raise HTTPException(409,'Game list changed; review it again')
+            invalidate_plans(db,session['owner'])
             previous={row['appid'] for row in db.execute('SELECT appid FROM game_selections WHERE owner=?',(session['owner'],))}
             for appid in previous-selected:store.revoke_game(db,session['owner'],appid,deselect=True)
             for appid in selected:
@@ -937,6 +959,7 @@ def create_app(config=None, steam=None, database=None, download_dir=None, achiev
         with store.db() as db:
             if not db.execute('SELECT 1 FROM game_selections WHERE owner=? AND appid=?',(session['owner'],appid)).fetchone():
                 raise HTTPException(403,'Select this game first')
+            invalidate_plans(db,session['owner'])
             request.state.browser_return='/games?game='+str(appid)+'#permissions'
             if data['enabled']=='yes':
                 db.execute('INSERT OR IGNORE INTO grants VALUES(?,?,?)',(session['owner'],appid,scope))
@@ -967,6 +990,7 @@ def create_app(config=None, steam=None, database=None, download_dir=None, achiev
         if data['enabled']=='yes' and not libraries.configured:raise HTTPException(503,'Operator library access is not configured')
         with store.db() as db:
             require_library_session(db,session)
+            invalidate_plans(db,session['owner'])
             if data['enabled']=='no':db.execute('DELETE FROM library_cache WHERE owner=?',(session['owner'],))
             else:
                 for row in db.execute('SELECT owner FROM library_cache WHERE expires<? AND payload IS NOT NULL LIMIT 100',(time.time(),)).fetchall():
@@ -1102,6 +1126,7 @@ def create_app(config=None, steam=None, database=None, download_dir=None, achiev
         session=store.session(request,True)
         await form(request,session,config.issuer)
         with store.db() as db:
+            invalidate_plans(db,session['owner'])
             for table in ('grants','devices','observations','events','notification_settings','notifications','game_selections','observations_v2','achievement_cache','library_cache'):
                 db.execute(f'DELETE FROM {table} WHERE owner=?',(session['owner'],))
             db.execute('DELETE FROM pairings WHERE owner=?',(session['owner'],))

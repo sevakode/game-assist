@@ -269,6 +269,9 @@ class BrowserFlowTests(unittest.TestCase):
         self.assertEqual(policy, baseline.replace("form-action 'self'", "form-action 'self' " + service.REDIRECT))
         injected = self.client.get(target + '&redirect_uri=https%3A%2F%2Funtrusted.example%2Fcallback', headers=HTML)
         self.assertEqual(injected.headers['content-security-policy'], policy)
+        # A second review GET intentionally rotates a server-bound plan.
+        # Submit the most recently displayed form, never the stale first tab.
+        form=FormReader(injected.text).forms[0]
         self.client.get('/',headers=HTML) # Navigation cancellation never approves.
         with self.app.state.store.db() as db:
             self.assertEqual(db.execute('SELECT count(*) FROM oauth_codes').fetchone()[0],0)

@@ -4,6 +4,7 @@ import hashlib
 import json
 import re
 import unittest
+from consent_fixtures import legacy_consent
 from urllib.parse import parse_qs, urlsplit
 from unittest.mock import patch
 
@@ -35,6 +36,7 @@ class MCPLibraryTests(unittest.TestCase):
             'redirect_uri':service.REDIRECT,'response_type':'code','scope':scope,'state':'library-state',
             'code_challenge':challenge,'code_challenge_method':'S256','resource':service.ORIGIN+'/mcp'})
 
+    @legacy_consent
     def tokens(self, client, scope, *, approve_library=True):
         response=self.start(client,scope)
         self.assertEqual(response.status_code,302,response.text)

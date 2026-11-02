@@ -105,6 +105,7 @@ class Cursor:
 def _postgres_sql(query):
     """Translate only known application dialect differences; bind values separately."""
     query = query.replace("json_extract(data,'$.subject')", "(data::jsonb->>'subject')")
+    query = query.replace("json_extract(data,'$._review_owner')", "(data::jsonb->>'_review_owner')")
     query = query.replace('kind="refresh"', "kind='refresh'")
     stripped = query.strip()
     if stripped.startswith('INSERT OR IGNORE INTO grants '):
